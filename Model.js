@@ -411,21 +411,6 @@ function moonState(nowMs, southernHemisphere, fractionOverride) {
   }
 }
 
-// Resolve a hemisphere hint from Omarchy's weather location file
-// (~/.local/state/omarchy/settings/weather.json): "south" when the
-// configured latitude is negative, "north" for zero/positive, and ""
-// when no usable latitude exists (caller keeps its default).
-function hemisphereFromLocationJson(text) {
-  var lat = NaN
-  try {
-    var parsed = JSON.parse(text)
-    if (parsed && parsed.latitude !== undefined && parsed.latitude !== null)
-      lat = parseFloat(parsed.latitude)
-  } catch (e) { lat = NaN }
-  if (isNaN(lat)) return ""
-  return lat < 0 ? "south" : "north"
-}
-
 // Hit-test the vector smile: true when (px,py) sits on the drawn mouth
 // arc. Geometry mirrors paintVector(): mouth is an arc centered slightly
 // above the disc center, radius 0.40*R, sweeping the lower half.
@@ -460,7 +445,6 @@ module.exports = {
     EGG_SEA: EGG_SEA,
     seaHit: seaHit,
     vecMouthHit: vecMouthHit,
-    hemisphereFromLocationJson: hemisphereFromLocationJson,
     seaCenter: seaCenter
   }
 }

@@ -1,6 +1,5 @@
 import QtQuick
 import Quickshell
-import Quickshell.Io
 import qs.Commons
 import qs.Ui
 import "Model.js" as Model
@@ -87,26 +86,11 @@ Panel {
     return Math.max(9, Math.min(41, n))
   }
 
-  // Hemisphere hint parsed from Omarchy's configured weather location
-  // (~/.local/state/omarchy/settings/weather.json, owned by
-  // omarchy-weather-location). "" means no usable latitude.
-  property string locationHemisphere: ""
-
-  FileView {
-    path: Quickshell.env("HOME") + "/.local/state/omarchy/settings/weather.json"
-    watchChanges: true
-    printErrors: false
-    onLoaded: root.locationHemisphere = Model.hemisphereFromLocationJson(text())
-    onLoadFailed: root.locationHemisphere = ""
-  }
-
-  // An explicit `hemisphere` in the layout entry always wins; otherwise the
-  // moon mirrors whenever Omarchy's location sits south of the equator;
-  // otherwise north.
+  // Hemisphere is explicit-only: "south" mirrors the art and glyphs, any
+  // other value (or unset) keeps the default north-up view.
   readonly property bool southUp: {
     var explicitHemi = String(setting("hemisphere", "")).trim().toLowerCase()
-    if (explicitHemi === "north" || explicitHemi === "south") return explicitHemi === "south"
-    return locationHemisphere === "south"
+    return explicitHemi === "south"
   }
 
   readonly property string effectiveArtStyle: artStyle

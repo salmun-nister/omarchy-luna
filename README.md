@@ -49,9 +49,9 @@ Settings are flat keys on the widget's entry in the `bar.layout` section of
                           // resumes the last-used style
   "artRows": 19,          // 9–41 (odd enforced); columns derive from the
                           // font's cell aspect so the moon stays circular
-  "hemisphere": "north",  // "north" | "south" — south mirrors the art/glyphs;
-                          // when unset, follows Omarchy's configured weather
-                          // location (southern latitude mirrors)
+  "hemisphere": "north",  // "north" | "south" — defaults to north; set
+                          // "south" if you're below the equator (mirrors
+                          // the art/glyphs)
   "showPercent": false,   // append illumination % to the bar pill
   "plainIcon": true       // pill icon: plain monochrome Nerd Font glyph
                           // (theme text color) instead of color emoji

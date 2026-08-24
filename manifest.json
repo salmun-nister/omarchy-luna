@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "salmun-nister.luna",
   "name": "Luna",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "author": "salmun-nister",
   "license": "MIT",
   "description": "Lunar companion for the Omarchy bar: a live moon phase pill with a stylized popup showing illumination, moon age, and next full/new moon dates.",

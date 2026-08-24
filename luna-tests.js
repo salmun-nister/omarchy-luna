@@ -129,17 +129,6 @@ function countCh(s, ch) { return s.split(ch).length - 1 }
   check('ascii style uses O for craters and ~ for seas', countCh(asciiFull, 'O') >= 8 && countCh(asciiFull, '~') >= 30)
 }
 
-// --- hemisphereFromLocationJson (Omarchy weather location hint) ---
-{
-  check('negative latitude -> south', M.hemisphereFromLocationJson('{"name":"sydney","latitude":-33.9,"longitude":151.2}') === 'south')
-  check('positive latitude -> north', M.hemisphereFromLocationJson('{"latitude": 12.97}') === 'north')
-  check('zero latitude -> north', M.hemisphereFromLocationJson('{"latitude": 0}') === 'north')
-  check('string latitude parses', M.hemisphereFromLocationJson('{"latitude": "-10.5"}') === 'south')
-  check('missing latitude -> empty hint', M.hemisphereFromLocationJson('{"name":"nowhere"}') === '')
-  check('null latitude -> empty hint', M.hemisphereFromLocationJson('{"latitude": null}') === '')
-  check('garbage json -> empty hint', M.hemisphereFromLocationJson('not json at all') === '')
-}
-
 // --- vecMouthHit (vector tongue easter egg) ---
 {
   // Geometry mirrors paintVector: w=h=200 -> R=97, mouth center (100, 98.06),
