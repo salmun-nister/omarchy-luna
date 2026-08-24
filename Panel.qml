@@ -1,5 +1,8 @@
 import QtQuick
 import Quickshell
+// Provides IpcHandler below — NOT removable when the v0.1.2 hemisphere
+// FileView went away, even though that was this import's other consumer.
+import Quickshell.Io
 import qs.Commons
 import qs.Ui
 import "Model.js" as Model
