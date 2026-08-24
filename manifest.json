@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "salmun-nister.luna",
+  "name": "Luna",
+  "version": "0.1.0",
+  "author": "salmun-nister",
+  "license": "MIT",
+  "description": "Lunar companion for the Omarchy bar: a live moon phase pill with a stylized popup showing illumination, moon age, and next full/new moon dates.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Luna",
+    "description": "Moon phase pill with a stylized lunar art popup",
+    "category": "Info",
+    "allowMultiple": false,
+    "defaultSection": "center"
+  }
+}
