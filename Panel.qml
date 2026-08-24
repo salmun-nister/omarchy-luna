@@ -48,10 +48,6 @@ Panel {
     else root.openFromHotkey()
   }
 
-  function refresh() {
-    // Fully reactive — everything derives from clock.date. Nothing to do.
-  }
-
   function switchPanel(direction) {
     if (root.bar && typeof root.bar.switchPanelFrom === "function")
       return root.bar.switchPanelFrom(root.barIdentity, direction)
@@ -86,7 +82,8 @@ Panel {
   readonly property int artRows: {
     var n = parseInt(setting("artRows", 19), 10)
     if (isNaN(n)) n = 19
-    return Math.max(9, Math.min(41, n))
+    n = Math.max(9, Math.min(41, n))
+    return n % 2 === 0 ? n + 1 : n
   }
 
   // Hemisphere is explicit-only: "south" mirrors the art and glyphs, any
@@ -96,11 +93,9 @@ Panel {
     return explicitHemi === "south"
   }
 
-  readonly property string effectiveArtStyle: artStyle
-
   function cycleArtStyle() {
     var order = ["blocks", "ascii", "vector", "cartoon"]
-    persistSettings({ artStyle: order[(order.indexOf(effectiveArtStyle) + 1) % order.length] })
+    persistSettings({ artStyle: order[(order.indexOf(artStyle) + 1) % order.length] })
   }
 
   function togglePlainIcon() {
@@ -147,8 +142,6 @@ Panel {
     return ratio >= 1.2 && ratio <= 3 ? ratio : 2.0
   }
 
-  readonly property int artColumns: Math.max(artRows, Math.round(artRows * artCellAspect))
-
   readonly property var phase: Model.moonState(clock.date.getTime(), southUp)
 
   // What the bar pill shows: emoji, or the monochrome themed glyph when the
@@ -160,7 +153,7 @@ Panel {
   readonly property string tooltipText: phase.phaseName + " · " + phase.illuminationPct + "% illuminated"
   readonly property string notificationSummary: phase.glyph + " " + phase.phaseName + " — " + phase.illuminationPct + "% illuminated"
 
-  readonly property string moonArt: Model.renderMoonArt(displayFraction, effectiveArtStyle, artRows, southUp, artCellAspect, winkNow)
+  readonly property string moonArt: Model.renderMoonArt(displayFraction, artStyle, artRows, southUp, artCellAspect, winkNow)
 
   // Decorative sky around the disk: REGENERATED with new random positions
   // every time the popup opens or the style changes. Rejection sampling
@@ -215,11 +208,10 @@ Panel {
   }
 
   onOpenedChanged: if (opened) Qt.callLater(_shuffleStars)
-  onEffectiveArtStyleChanged: if (root.opened) Qt.callLater(_shuffleStars)
+  onArtStyleChanged: if (root.opened) Qt.callLater(_shuffleStars)
 
-  // Cartoon face winks its right eye at random: uniform 20-100s gaps
-  // (about one minute on average, never more often than every 20s).
-  // Vector winks every 10s while that style is in testing. Driven by a
+  // Canvas faces wink their right eye at random: uniform 10–60 s gaps
+  // (about 35 s on average), same cadence for both styles. Driven by a
   // fixed heartbeat + countdown so we never mutate Timer.interval
   // mid-flight (its restart semantics proved unreliable).
   property bool winkNow: false
@@ -228,7 +220,7 @@ Panel {
     id: winkTick
     interval: 500
     repeat: true
-    running: root.opened && (root.effectiveArtStyle === "vector" || root.effectiveArtStyle === "cartoon")
+    running: root.opened && (root.artStyle === "vector" || root.artStyle === "cartoon")
     onRunningChanged: if (running) remainMs = root.nextWinkMs()
     onTriggered: {
       remainMs -= interval
@@ -249,9 +241,9 @@ Panel {
 
   function nextWinkMs() {
     // Dev mode: rapid 3s winks for testing. Otherwise a random cooldown:
-    // at least 10s, at most 2 minutes.
+    // at least 10s, at most 60s.
     if (root.devMode) return 3000
-    return 10000 + Math.floor(Math.random() * 110000)
+    return 10000 + Math.floor(Math.random() * 50000)
   }
 
   // ---- Dev test mode ----
@@ -356,9 +348,9 @@ Panel {
     // (CLI drops return values, so also log to the qs log).
     function status() {
       var s = JSON.stringify({
-        style: root.effectiveArtStyle,
+        style: root.artStyle,
         rows: root.artRows,
-        columns: root.artColumns,
+        columns: Math.max(root.artRows, Math.round(root.artRows * root.artCellAspect)),
         cellAspect: Math.round(root.artCellAspect * 1000) / 1000,
         artPx: [Math.round(moonText.implicitWidth), Math.round(moonText.implicitHeight)],
         contentW: panel.contentWidth,
@@ -442,7 +434,7 @@ Panel {
             anchors.leftMargin: Style.space(12)
             anchors.bottom: parent.bottom
             visible: root.devMode
-            text: root.effectiveArtStyle
+            text: root.artStyle
             color: Color.accent
             font.family: root.bar.fontFamily
             font.pixelSize: Style.font.caption
@@ -465,8 +457,8 @@ Panel {
                 var p = moonTap.point.position
                 var fx = p.x / Math.max(1, moonText.implicitWidth)
                 var fy = p.y / Math.max(1, moonText.implicitHeight)
-                if (root.effectiveArtStyle === "ascii" && Model.seaHit(fx, fy, root.southUp)) root.startEgg()
-                else if (root.effectiveArtStyle === "vector" &&
+                if (root.artStyle === "ascii" && Model.seaHit(fx, fy, root.southUp)) root.startEgg()
+                else if (root.artStyle === "vector" &&
                          Model.vecMouthHit(p.x, p.y, moonText.implicitWidth, moonText.implicitHeight)) root.stickTongue()
                 else root.cycleArtStyle()
               }
@@ -484,11 +476,11 @@ Panel {
           Canvas {
             id: moonCanvas
             anchors.fill: moonText
-            visible: root.effectiveArtStyle === "vector" || root.effectiveArtStyle === "cartoon"
+            visible: root.artStyle === "vector" || root.artStyle === "cartoon"
 
             readonly property var _sig: [
               width, height, root.displayFraction, root.winkNow, root.southUp,
-              root.effectiveArtStyle, root.tongueOut,
+              root.artStyle, root.tongueOut,
               root.bar ? root.bar.foreground.toString() : ""
             ]
             on_SigChanged: requestPaint()
@@ -498,7 +490,7 @@ Panel {
             onPaint: {
               var ctx = getContext("2d")
               ctx.reset()
-              if (root.effectiveArtStyle === "cartoon")
+              if (root.artStyle === "cartoon")
                 paintHose(ctx, width, height)
               else
                 paintVector(ctx, width, height)
@@ -638,8 +630,6 @@ function paintHose(ctx, w, h) {
               // tongue is a foreground/background mix. No literals.
               var fg = root.bar ? root.bar.foreground : Color.foreground
               var bg = Color.popups ? Color.popups.background : Color.background
-              var INK = fg
-              var BGOP = Qt.rgba(bg.r, bg.g, bg.b, 1)
               function inkA(a) { return Qt.rgba(fg.r, fg.g, fg.b, a) }
 
               // Geometry helpers in SVG-normalized coordinates.
@@ -696,7 +686,7 @@ function paintHose(ctx, w, h) {
               ctx.save()
               regionPath(ctx, w, h, dir, t)
               ctx.clip()
-              ctx.strokeStyle = INK
+              ctx.strokeStyle = fg
               ctx.lineWidth = Math.max(1, k * 0.0156)
               var craters = [
                 // Right side: exactly three.
@@ -716,7 +706,7 @@ function paintHose(ctx, w, h) {
                 var cp = P(craters[cg][0], craters[cg][1])
                 ovalPath(cp[0], cp[1], craters[cg][2] * k,
                          craters[cg][3] * k, craters[cg][4])
-                ctx.strokeStyle = INK
+                ctx.strokeStyle = fg
                 ctx.lineWidth = Math.max(1, k * 0.0156)
                 ctx.stroke()
               }
@@ -739,23 +729,23 @@ function paintHose(ctx, w, h) {
                 var ec = P(E.c[0], E.c[1])
                 if (E.right && root.winkNow) continue
                 ovalPath(ec[0], ec[1], E.rx * k, E.ry * k, E.rot)
-                ctx.fillStyle = BGOP
+                ctx.fillStyle = bg
                 ctx.fill()
-                ctx.strokeStyle = INK
+                ctx.strokeStyle = fg
                 ctx.lineWidth = Math.max(1.5, k * 0.0222)
                 ctx.stroke()
                 var pc = P(E.pu[0], E.pu[1])
                 ovalPath(pc[0], pc[1], E.prx * k, E.pry * k, E.rot)
-                ctx.fillStyle = INK
+                ctx.fillStyle = fg
                 ctx.fill()
                 var hc = P(E.hl[0], E.hl[1])
-                ctx.fillStyle = BGOP
+                ctx.fillStyle = bg
                 ctx.beginPath()
                 ctx.arc(hc[0], hc[1], Math.max(2, 0.025 * k), 0, 2 * Math.PI)
                 ctx.fill()
               }
               // Brows: expressive filled wedges.
-              ctx.fillStyle = INK
+              ctx.fillStyle = fg
               ctx.beginPath()
               ctx.moveTo.apply(ctx, P(-0.598, -0.523))
               ctx.quadraticCurveTo.apply(ctx, P(-0.532, -0.750).concat(P(-0.416, -0.830)))
@@ -790,7 +780,7 @@ function paintHose(ctx, w, h) {
                 }
                 var wt = wpts[0], wm1 = wpts[1], wv = wpts[2]
                 var wm2 = wpts[3], wb = wpts[4]
-                ctx.strokeStyle = INK
+                ctx.strokeStyle = fg
                 ctx.lineWidth = Math.max(1.5, k * 0.018)
                 ctx.lineCap = "round"
                 ctx.beginPath()
@@ -806,9 +796,9 @@ function paintHose(ctx, w, h) {
               ctx.quadraticCurveTo.apply(ctx, P(0.407, -0.480).concat(P(0.349, -0.307)))
               ctx.quadraticCurveTo.apply(ctx, P(0.273, -0.173).concat(P(-0.011, -0.093)))
               ctx.closePath()
-              ctx.fillStyle = BGOP
+              ctx.fillStyle = bg
               ctx.fill()
-              ctx.strokeStyle = INK
+              ctx.strokeStyle = fg
               ctx.lineWidth = Math.max(1.5, k * 0.0222)
               ctx.lineJoin = "round"
               ctx.stroke()
@@ -856,7 +846,7 @@ function paintHose(ctx, w, h) {
               ctx.closePath()
               ctx.fillStyle = TONGUE
               ctx.fill()
-              ctx.strokeStyle = INK
+              ctx.strokeStyle = fg
               ctx.lineWidth = Math.max(1, k * 0.0167)
               ctx.beginPath()
               ctx.moveTo.apply(ctx, P(-0.151, 0.533))
@@ -864,12 +854,12 @@ function paintHose(ctx, w, h) {
               ctx.stroke()
               ctx.restore()
               mouthPath()
-              ctx.strokeStyle = INK
+              ctx.strokeStyle = fg
               ctx.lineWidth = Math.max(1.5, k * 0.020)
               ctx.stroke()
 
               // Cheek dimple off the left corner.
-              ctx.strokeStyle = INK
+              ctx.strokeStyle = fg
               ctx.lineWidth = Math.max(1.5, k * 0.020)
               ctx.lineCap = "round"
               ctx.beginPath()
@@ -890,7 +880,7 @@ function paintHose(ctx, w, h) {
                 }
                 ctx.closePath()
               }
-              ctx.strokeStyle = INK
+              ctx.strokeStyle = fg
               ctx.lineJoin = "round"
               wobble(k)
               ctx.lineWidth = Math.max(2, k * 0.027)

@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4] — 2026-08-24
+
+### Changed
+
+- Canvas-style wink cadence shortened to a uniform 10–60 s random cooldown
+  (was 10 s – 2 min); stale comments corrected to match the code.
+
+### Removed
+
+- Over-engineering trim, no behavior change beyond the cadence above: dead
+  `refresh()` forwarding pair (nothing called it), unused `moonAgeDays()`
+  helper, redundant `effectiveArtStyle` alias layer, diagnostics-only
+  `artColumns` property, pointless color aliases in the rubber-hose painter,
+  a duplicate test assertion, and re-validation of already-clamped inputs in
+  `renderMoonArt()` (odd-row enforcement now lives where the `artRows`
+  setting is read). Net −25 lines.
+
 ## [0.1.3] — 2026-08-24
 
 ### Fixed

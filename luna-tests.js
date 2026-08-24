@@ -100,7 +100,6 @@ function countCh(s, ch) { return s.split(ch).length - 1 }
   const full = M.renderMoonArt(0.5, 'blocks', 25, false, 2.0)
   check('full moon shows all 8 craters', countCh(full, '○') >= 8, `found ${countCh(full, '○')}`)
   check('craters deterministic', full === M.renderMoonArt(0.5, 'blocks', 25, false, 2.0))
-  check('craters stamp over seas (Aristarchus in Procellarum)', countCh(full, '○') >= 8)
 
   check('full moon shows seas', countCh(full, '▒') >= 30, `found ${countCh(full, '▒')}`)
 
@@ -190,11 +189,11 @@ function stripFeatures(a) {
 }
 check('waning mirrors waxing (shading only)', (() => {
   const rev = a => a.split('\n').map(l => [...l].reverse().join('')).join('\n')
-  return stripFeatures(rev(M.renderMoonArt(0.375, 'blocks', 13, false))) === stripFeatures(M.renderMoonArt(0.625, 'blocks', 13))
+  return stripFeatures(rev(M.renderMoonArt(0.375, 'blocks', 13, false, 2.0))) === stripFeatures(M.renderMoonArt(0.625, 'blocks', 13, false, 2.0))
 })())
 check('south render = mirrored north', (() => {
-  const n = M.renderMoonArt(0.125, 'blocks', 13, false).split('\n').map(l => [...l].reverse().join('')).join('\n')
-  const s = M.renderMoonArt(0.125, 'blocks', 13, true)
+  const n = M.renderMoonArt(0.125, 'blocks', 13, false, 2.0).split('\n').map(l => [...l].reverse().join('')).join('\n')
+  const s = M.renderMoonArt(0.125, 'blocks', 13, true, 2.0)
   return stripFeatures(n) === stripFeatures(s)
 })())
 

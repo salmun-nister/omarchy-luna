@@ -28,10 +28,6 @@ function illumination(fraction) {
   return (1 - Math.cos(2 * Math.PI * fraction)) / 2
 }
 
-function moonAgeDays(fraction) {
-  return fraction * SYNODIC_DAYS
-}
-
 function _near(fraction, target) {
   var d = Math.abs(fraction - target)
   return d <= PHASE_EPS || d >= 1 - PHASE_EPS
@@ -194,7 +190,6 @@ function nextFullMoonMs(nowMs) {
 var PALETTES = {
   blocks: { lit: "\u2588", term: "\u2593", dark: "\u00B7", void: " ", crater: "\u25CB", sea: "\u2592" }, // █ ▓ · ○ ▒
   ascii: { lit: "@", term: "#", dark: ".", void: " ", crater: "O", sea: "~" },
-  // Cartoon: soft-shaded body, bold rim ring, face stamped when mostly lit.
 }
 
 // A few near-side features, loosely placed (northern-hemisphere naked-eye
@@ -302,17 +297,12 @@ function _stampFace(grid, rowCount, colCount, palette, wink) {
 // it from the rendering font); columns are derived from it so the disk stays
 // circular instead of assuming square cells. style: "blocks" | "ascii".
 // ("vector" and "cartoon" are canvas-drawn and get blank placeholder grids.)
+// ponytail: inputs assumed caller-normalized — Panel.artRows clamps 9–41 odd,
+// Panel.artCellAspect clamps 1.2–3; tests pass literals.
 function renderMoonArt(fraction, style, rows, mirror, aspect, wink) {
   var palette = PALETTES[style] === undefined ? PALETTES.blocks : PALETTES[style]
 
-  var rowCount = parseInt(rows, 10)
-  if (isNaN(rowCount)) rowCount = 13
-  rowCount = Math.max(7, Math.min(41, rowCount))
-  if (rowCount % 2 === 0) rowCount += 1
-
-  var cellAspect = parseFloat(aspect)
-  if (isNaN(cellAspect) || cellAspect < 1 || cellAspect > 4) cellAspect = 2
-  var colCount = Math.max(rowCount, Math.round(rowCount * cellAspect))
+  var colCount = Math.max(rows, Math.round(rows * aspect))
 
   // Canvas-drawn styles (vector, cartoon): the text layer just holds
   // the layout, so return an all-spaces grid with identical dimensions.
@@ -321,7 +311,7 @@ function renderMoonArt(fraction, style, rows, mirror, aspect, wink) {
   if (style === "vector" || style === "cartoon") {
     var spaces = new Array(colCount + 1).join(" ")
     var blank = []
-    for (var bi = 0; bi < rowCount; bi++) blank.push(spaces)
+    for (var bi = 0; bi < rows; bi++) blank.push(spaces)
     return blank.join("\n")
   }
 
@@ -332,8 +322,8 @@ function renderMoonArt(fraction, style, rows, mirror, aspect, wink) {
 
   // Cell grid as rows of characters so features can be stamped after shading.
   var grid = []
-  for (var j = 0; j < rowCount; j++) {
-    var y = ((j + 0.5) / rowCount) * 2 - 1
+  for (var j = 0; j < rows; j++) {
+    var y = ((j + 0.5) / rows) * 2 - 1
     var chord = Math.sqrt(Math.max(0, 1 - y * y))
     // Terminator x-position for this row; lit side is right when waxing.
     var boundary = waxing ? t * chord : -(t * chord)
@@ -354,8 +344,8 @@ function renderMoonArt(fraction, style, rows, mirror, aspect, wink) {
     grid.push(row)
   }
 
-  _stampSeas(grid, rowCount, colCount, palette)
-  _stampCraters(grid, rowCount, colCount, palette)
+  _stampSeas(grid, rows, colCount, palette)
+  _stampCraters(grid, rows, colCount, palette)
 
   var lines = []
   for (var k = 0; k < grid.length; k++) {
@@ -432,7 +422,6 @@ module.exports = {
     EPOCH_MS: EPOCH_MS,
     phaseFraction: phaseFraction,
     illumination: illumination,
-    moonAgeDays: moonAgeDays,
     phaseName: phaseName,
     glyphFor: glyphFor,
     plainGlyphFor: plainGlyphFor,

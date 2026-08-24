@@ -16,10 +16,6 @@ BarWidget {
     if ("hostWidget" in target) target.hostWidget = root
   }
 
-  function refresh() {
-    if (panelLoader.item && panelLoader.item.refresh) panelLoader.item.refresh()
-  }
-
   function togglePanel() {
     if (panelLoader.item && panelLoader.item.toggle) panelLoader.item.toggle()
   }
