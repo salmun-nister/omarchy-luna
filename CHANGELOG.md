@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] — 2026-08-23
+
+### Added
+
+- Regression test suite (`luna-tests.js`): moon-phase math checked against
+  known 2024 UTC lunar events, Meeus lunation predictions verified against 20
+  cross-referenced 2026 almanac instants, hemisphere auto-detect parsing, the
+  vector-style mouth hit test, and art-renderer invariants (mirror/south
+  equivalence, crater/sea stamping). Run with `node luna-tests.js`.
+
 ## [0.1.0] — 2026-08-23
 
 ### Added
