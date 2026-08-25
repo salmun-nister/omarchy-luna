@@ -28,12 +28,6 @@ omarchy bar move salmun-nister.luna --section right
 - **Right-click** the pill — desktop notification summarizing the phase
 - **Tab** while the popup is open — switch to the neighboring panel
 
-During a (umbral) lunar eclipse the panel shows a red "Partial/Total Lunar
-Eclipse" line under the phase name, the moon art darkens under Earth's
-shadow, and the bar pill shifts toward your theme's alert color with eclipse
-depth. Nothing to configure — it happens when it happens (next visible one:
-August 28, 2026).
-
 The disk is rendered at the exact phase fraction with lunar features loosely
 inspired by the real near side: craters (Tycho, Copernicus, Kepler,
 Aristarchus, Plato, Gassendi, Langrenus, Grimaldi) and dark maria (Imbrium,
@@ -41,6 +35,15 @@ Serenitatis, Tranquillitatis, Fecunditatis, Crisium, Nubium, Humorum and
 Oceanus Procellarum); each appears only when its position is illuminated.
 Stars twinkle around it, reshuffled every time the popup opens or the
 style changes.
+
+![Phase cycling through the lunar month](preview_phases.gif)
+
+During a (umbral) lunar eclipse the panel shows a red "Partial/Total Lunar
+Eclipse" line under the phase name, the moon art darkens under Earth's
+shadow, and the bar pill shifts toward your theme's alert color with eclipse
+depth.
+
+![Eclipse preview](preview_eclipse.gif)
 
 ## Settings
 
