@@ -525,13 +525,21 @@ Panel {
           // inside the card.
           clip: true
 
-          // Dev mode only: name the active style in the bottom-left.
           Text {
             anchors.left: parent.left
             anchors.leftMargin: Style.space(12)
             anchors.bottom: parent.bottom
-            visible: root.devMode
-            text: root.artStyle
+            visible: root.devMode && !root.devQuiet
+            text: {
+              var parts = [root.artStyle]
+              if (root.devEclipseStage > 0) {
+                var k = root.devEclipsePreview && root.devEclipsePreview.kind === "total"
+                        ? "total" : "partial"
+                parts.push("eclipse:" + k)
+              }
+              parts.push(root.displaySouthUp ? "south" : "north")
+              return parts.join(" | ")
+            }
             color: Color.accent
             font.family: root.bar.fontFamily
             font.pixelSize: Style.font.caption
@@ -1375,24 +1383,6 @@ function paintHose(ctx, w, h) {
             id: hintLabel
             anchors.centerIn: parent
             text: "[S] Style · [I] Icon"
-            color: Qt.darker(root.bar.foreground, 1.5)
-            font.family: root.bar.fontFamily
-            font.pixelSize: Style.font.bodySmall
-          }
-
-          Text {
-            anchors.centerIn: parent
-            visible: root.devMode && !root.devQuiet
-            text: {
-              var parts = [root.artStyle]
-              if (root.devEclipseStage > 0) {
-                var k = root.devEclipsePreview && root.devEclipsePreview.kind === "total"
-                        ? "total" : "partial"
-                parts.push("eclipse:" + k)
-              }
-              parts.push(root.displaySouthUp ? "south" : "north")
-              return parts.join(" | ")
-            }
             color: Qt.darker(root.bar.foreground, 1.5)
             font.family: root.bar.fontFamily
             font.pixelSize: Style.font.bodySmall
