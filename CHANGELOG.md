@@ -17,8 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   events are skipped — they're invisible to the eye anyway.
 - Dev test mode extension: `E` runs an animated eclipse preview — first a
   partial event start-to-end, then a total one with its totality plateau,
-  each looping until switched off. Any active preview pins the phase at
-  full moon, since lunar eclipses only happen there.
+  each looping until switched off; `H` previews the southern-hemisphere
+  view across panel art, glyphs, and the bar pill without touching the
+  setting. Any active eclipse preview pins the phase at full moon, since
+  lunar eclipses only happen there.
 
 ### Verified
 

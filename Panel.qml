@@ -151,7 +151,7 @@ Panel {
   // What the bar pill shows: emoji, or the monochrome themed glyph when the
   // plainIcon setting is on. Notifications keep the real moon's emoji.
   readonly property string pillGlyph: plainIcon
-      ? Model.plainGlyphFor(displayPhase.fraction, southUp)
+      ? Model.plainGlyphFor(displayPhase.fraction, displaySouthUp)
       : displayPhase.glyph
   readonly property string label: pillGlyph + (showPercent ? " " + displayPhase.illuminationPct + "%" : "")
   readonly property string tooltipText: displayPhase.phaseName + " · " + displayPhase.illuminationPct + "% illuminated"
@@ -164,7 +164,7 @@ Panel {
   // Pill styling inputs for BarWidget (tint on plain glyph, halo on emoji).
   readonly property real pillEclipseDepth: artEclipse ? artEclipse.depth : 0
 
-  readonly property string moonArt: Model.renderMoonArt(displayFraction, artStyle, artRows, southUp, artCellAspect, winkNow, artEclipse)
+  readonly property string moonArt: Model.renderMoonArt(displayFraction, artStyle, artRows, displaySouthUp, artCellAspect, winkNow, artEclipse)
 
   // Decorative sky around the disk: REGENERATED with new random positions
   // every time the popup opens or the style changes. Rejection sampling
@@ -274,10 +274,21 @@ Panel {
 
   function toggleDev() {
     devMode = !devMode
-    if (devMode) devFraction = phase.fraction
-    else devEclipseStage = 0
-    // Re-arm the wink heartbeat so the new cadence applies at once.
+    if (devMode) {
+      devFraction = phase.fraction
+      devSouth = southUp
+    } else {
+      devEclipseStage = 0
+    }
     remainMs = nextWinkMs()
+  }
+
+  property bool devSouth: false
+  readonly property bool displaySouthUp: devMode ? devSouth : southUp
+
+  function toggleDevHemisphere() {
+    if (!devMode) return
+    devSouth = !devSouth
   }
 
   // Eclipse preview: while dev mode is on, E picks what animates — first
@@ -343,7 +354,7 @@ Panel {
   }
 
   readonly property var displayPhase: root.devMode
-      ? Model.moonState(clock.date.getTime(), southUp, devFraction)
+      ? Model.moonState(clock.date.getTime(), displaySouthUp, devFraction)
       : root.phase
 
   // ---- Easter egg ----
@@ -414,6 +425,7 @@ Panel {
         contentH: panel.contentHeight,
         egg: root.eggRunning,
         dev: root.devMode,
+        southUp: root.displaySouthUp,
         eclipse: (function() {
           var e = root.artEclipse
           if (!e) return null
@@ -461,6 +473,7 @@ Panel {
         if (t === "s" || t === "S") root.cycleArtStyle()
         else if (t === "i" || t === "I") root.togglePlainIcon()
         else if (t === "e" || t === "E") root.cycleDevEclipse()
+        else if (t === "h" || t === "H") root.toggleDevHemisphere()
         else if (t === "?") root.toggleDev()
       }
       onCloseRequested: root.close()
@@ -537,7 +550,7 @@ Panel {
                 var p = moonTap.point.position
                 var fx = p.x / Math.max(1, moonText.implicitWidth)
                 var fy = p.y / Math.max(1, moonText.implicitHeight)
-                if (root.artStyle === "ascii" && Model.seaHit(fx, fy, root.southUp)) root.startEgg()
+                if (root.artStyle === "ascii" && Model.seaHit(fx, fy, root.displaySouthUp)) root.startEgg()
                 else if (root.artStyle === "vector" &&
                          Model.vecMouthHit(p.x, p.y, moonText.implicitWidth, moonText.implicitHeight)) root.stickTongue()
                 else root.cycleArtStyle()
@@ -559,7 +572,7 @@ Panel {
             visible: root.artStyle === "vector" || root.artStyle === "cartoon"
 
             readonly property var _sig: [
-              width, height, root.displayFraction, root.winkNow, root.southUp,
+              width, height, root.displayFraction, root.winkNow, root.displaySouthUp,
               root.artStyle, root.tongueOut,
               root.bar ? root.bar.foreground.toString() : "",
               JSON.stringify(root.artEclipse)
@@ -658,7 +671,7 @@ Panel {
                 // else canvas-drawn.
                 var RUv = R * 2.7
                 var XEv = RUv + 1.15 * R
-                var flipV = root.southUp ? -1 : 1
+                var flipV = root.displaySouthUp ? -1 : 1
                 var oxV = flipV * (-XEv + 2 * XEv * ecl.progress)
                 var oyMidV = -ecl.gamma / 0.2725 * R
                 var oyV = oyMidV - 0.6 * R * (0.5 - ecl.progress)
@@ -767,6 +780,28 @@ function paintHose(ctx, w, h) {
                   else ctx.lineTo(px, py)
                 }
                 ctx.closePath()
+              }
+              function umbraHatch(ucx, ucy, clipR, alpha) {
+                ctx.save()
+                ctx.beginPath()
+                ctx.arc(cx, cy, k * 0.97, 0, 2 * Math.PI)
+                ctx.clip()
+                ctx.beginPath()
+                ctx.arc(ucx, ucy, clipR, 0, 2 * Math.PI)
+                ctx.clip()
+                ctx.strokeStyle = inkA(alpha)
+                ctx.lineWidth = Math.max(1, k * 0.012)
+                var xa = 0.23
+                var xca = Math.cos(xa), xsa = Math.sin(xa)
+                for (var xl = -16; xl <= 16; xl++) {
+                  var xy = xl * k * 0.055
+                  var vx1 = -k * 1.6, vy1 = xy, vx2 = k * 1.6
+                  ctx.beginPath()
+                  ctx.moveTo(ucx + vx1 * xca - vy1 * xsa, ucy + vx1 * xsa + vy1 * xca)
+                  ctx.lineTo(ucx + vx2 * xca - vy1 * xsa, ucy + vx2 * xsa + vy1 * xca)
+                  ctx.stroke()
+                }
+                ctx.restore()
               }
 
               // Body: exact card surface so the disc melts into the panel.
@@ -1070,7 +1105,7 @@ function paintHose(ctx, w, h) {
           readonly property real eggManX: {
             var c = Model.seaCenter(Model.EGG_SEA)
             if (!c) return 0
-            var nx = root.southUp ? -c.x : c.x
+            var nx = root.displaySouthUp ? -c.x : c.x
             return moonText.x + ((nx + 1) / 2) * moonText.implicitWidth
           }
           readonly property real eggManY: {
@@ -1354,7 +1389,7 @@ function paintHose(ctx, w, h) {
           Text {
             id: hintLabel
             anchors.centerIn: parent
-            text: "[S] Style · [I] Icon" + (root.devMode ? " · [E] Eclipse" : "")
+            text: "[S] Style · [I] Icon" + (root.devMode ? " · [E] Eclipse · [H] Hem" : "") + (root.devMode ? " · [E] Eclipse" : "")
             color: Qt.darker(root.bar.foreground, 1.5)
             font.family: root.bar.fontFamily
             font.pixelSize: Style.font.bodySmall
