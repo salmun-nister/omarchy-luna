@@ -277,6 +277,7 @@ Panel {
     if (devMode) {
       devFraction = phase.fraction
       devSouth = southUp
+      devQuiet = false
     } else {
       devEclipseStage = 0
     }
@@ -284,11 +285,17 @@ Panel {
   }
 
   property bool devSouth: false
+  property bool devQuiet: false
   readonly property bool displaySouthUp: devMode ? devSouth : southUp
 
   function toggleDevHemisphere() {
     if (!devMode) return
     devSouth = !devSouth
+  }
+
+  function toggleDevQuiet() {
+    if (!devMode) return
+    devQuiet = !devQuiet
   }
 
   // Eclipse preview: while dev mode is on, E picks what animates — first
@@ -425,6 +432,7 @@ Panel {
         contentH: panel.contentHeight,
         egg: root.eggRunning,
         dev: root.devMode,
+        quiet: root.devQuiet,
         southUp: root.displaySouthUp,
         eclipse: (function() {
           var e = root.artEclipse
@@ -473,7 +481,8 @@ Panel {
         if (t === "s" || t === "S") root.cycleArtStyle()
         else if (t === "i" || t === "I") root.togglePlainIcon()
         else if (t === "e" || t === "E") root.cycleDevEclipse()
-        else if (t === "h" || t === "H") root.toggleDevHemisphere()
+        else if (t === "n" || t === "N") root.toggleDevHemisphere()
+        else if (t === "q" || t === "Q") root.toggleDevQuiet()
         else if (t === "?") root.toggleDev()
       }
       onCloseRequested: root.close()
@@ -1365,36 +1374,26 @@ function paintHose(ctx, w, h) {
           Text {
             id: hintLabel
             anchors.centerIn: parent
-            text: "[S] Style · [I] Icon" + (root.devMode ? " · [E] Eclipse · [H] Hem" : "") + (root.devMode ? " · [E] Eclipse" : "")
+            text: "[S] Style · [I] Icon"
             color: Qt.darker(root.bar.foreground, 1.5)
             font.family: root.bar.fontFamily
             font.pixelSize: Style.font.bodySmall
           }
 
-          // Dev badge appears only while dev mode is active.
           Text {
-            id: devBadge
-            anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
-            visible: root.devMode
-            text: "Dev"
-            color: Color.accent
-            font.underline: true
-            font.bold: true
-            font.family: root.bar.fontFamily
-            font.pixelSize: Style.font.bodySmall
-          }
-
-          // Eclipse preview badge sits left of the Dev badge.
-          Text {
-            anchors.right: devBadge.visible ? devBadge.left : parent.right
-            anchors.rightMargin: Style.space(10)
-            anchors.verticalCenter: parent.verticalCenter
-            visible: root.devMode && root.devEclipseStage > 0
-            text: root.devEclipsePreview && root.devEclipsePreview.kind === "total"
-                  ? "Eclipse:T" : "Eclipse:P"
-            color: Color.urgent
-            font.bold: true
+            anchors.centerIn: parent
+            visible: root.devMode && !root.devQuiet
+            text: {
+              var parts = [root.artStyle]
+              if (root.devEclipseStage > 0) {
+                var k = root.devEclipsePreview && root.devEclipsePreview.kind === "total"
+                        ? "total" : "partial"
+                parts.push("eclipse:" + k)
+              }
+              parts.push(root.displaySouthUp ? "south" : "north")
+              return parts.join(" | ")
+            }
+            color: Qt.darker(root.bar.foreground, 1.5)
             font.family: root.bar.fontFamily
             font.pixelSize: Style.font.bodySmall
           }
