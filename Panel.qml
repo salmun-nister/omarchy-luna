@@ -781,29 +781,6 @@ function paintHose(ctx, w, h) {
                 }
                 ctx.closePath()
               }
-              function umbraHatch(ucx, ucy, clipR, alpha) {
-                ctx.save()
-                ctx.beginPath()
-                ctx.arc(cx, cy, k * 0.97, 0, 2 * Math.PI)
-                ctx.clip()
-                ctx.beginPath()
-                ctx.arc(ucx, ucy, clipR, 0, 2 * Math.PI)
-                ctx.clip()
-                ctx.strokeStyle = inkA(alpha)
-                ctx.lineWidth = Math.max(1, k * 0.012)
-                var xa = 0.23
-                var xca = Math.cos(xa), xsa = Math.sin(xa)
-                for (var xl = -16; xl <= 16; xl++) {
-                  var xy = xl * k * 0.055
-                  var vx1 = -k * 1.6, vy1 = xy, vx2 = k * 1.6
-                  ctx.beginPath()
-                  ctx.moveTo(ucx + vx1 * xca - vy1 * xsa, ucy + vx1 * xsa + vy1 * xca)
-                  ctx.lineTo(ucx + vx2 * xca - vy1 * xsa, ucy + vx2 * xsa + vy1 * xca)
-                  ctx.stroke()
-                }
-                ctx.restore()
-              }
-
               // Body: exact card surface so the disc melts into the panel.
               ctx.beginPath()
               ctx.arc(cx, cy, k, 0, 2 * Math.PI)
@@ -827,35 +804,34 @@ function paintHose(ctx, w, h) {
               }
               ctx.restore()
 
-              // Eclipse: denser cross-hatch inside the umbra, ink-only so
-              // the style stays monochrome. Same time-driven transit
-              // geometry as the text art stamp.
+              // Eclipse: solid umbrella shadow clipped to disk ∩ umbra
+              // circle — same radial geometry as the text-art stamp. Uses
+              // inkA() so the result is monochrome (ink palette colors only,
+              // no new hue), with a lighter rim ring for the soft edge.
               if (root.artEclipse && root.artEclipse.depth > 0) {
                 var ecl = root.artEclipse
                 var RUh = k * 2.7
                 var XEh = RUh + 1.15 * k
-                var flipH = root.southUp ? -1 : 1
+                var flipH = root.displaySouthUp ? -1 : 1
                 var oxH = flipH * (-XEh + 2 * XEh * ecl.progress)
                 var oyMidH = -ecl.gamma / 0.2725 * k
                 var oyH = oyMidH - 0.6 * k * (0.5 - ecl.progress)
                 var ucx = cx + oxH
                 var ucy = cy + oyH
+                // Clip: disk ∩ umbra circle — the two-circle intersection
+                // that makes a natural arc at every angle.
                 ctx.save()
                 ctx.beginPath()
                 ctx.arc(cx, cy, k * 0.97, 0, 2 * Math.PI)
                 ctx.clip()
-                ctx.strokeStyle = inkA(Math.min(0.65, 0.22 + 0.45 * ecl.depth))
-                ctx.lineWidth = Math.max(1, k * 0.012)
-                var xa = 0.23
-                var xca = Math.cos(xa), xsa = Math.sin(xa)
-                for (var xl = -16; xl <= 16; xl++) {
-                  var xy = xl * k * 0.055 // offsets about the umbra center
-                  var vx1 = -k * 1.6, vy1 = xy, vx2 = k * 1.6
-                  ctx.beginPath()
-                  ctx.moveTo(ucx + vx1 * xca - vy1 * xsa, ucy + vx1 * xsa + vy1 * xca)
-                  ctx.lineTo(ucx + vx2 * xca - vy1 * xsa, ucy + vx2 * xsa + vy1 * xca)
-                  ctx.stroke()
-                }
+                ctx.beginPath()
+                ctx.arc(ucx, ucy, RUh + 0.35 * k, 0, 2 * Math.PI)
+                ctx.fillStyle = inkA(Math.min(0.35, 0.12 + 0.23 * ecl.depth))
+                ctx.fill()
+                ctx.beginPath()
+                ctx.arc(ucx, ucy, RUh, 0, 2 * Math.PI)
+                ctx.fillStyle = inkA(Math.min(0.65, 0.22 + 0.45 * ecl.depth))
+                ctx.fill()
                 ctx.restore()
               }
 
