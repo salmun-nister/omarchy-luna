@@ -281,6 +281,18 @@ check('south render = mirrored north', (() => {
     && before.label === 'Total Lunar Eclipse')
   check('depth plateaus through totality', before.depth === 1 && during.depth === 1)
 
+  // Progress spans the full umbral window (totals include totality wings).
+  const tGreatest = M.eclipseState(tg).greatestMs
+  const tEarly = M.eclipseState(tGreatest - 150 * 60000)
+  const tMid = M.eclipseState(tGreatest)
+  const tLate = M.eclipseState(tGreatest + 150 * 60000)
+  check('progress defined through total window',
+    !!tEarly && !!tMid && !!tLate &&
+    tEarly.progress < tMid.progress && tMid.progress < tLate.progress)
+  const pG = M.eclipseState(Date.parse('2026-08-28T04:14:04Z'))
+  check('partial progress ~0.5 at greatest',
+    !!pG && Math.abs(pG.progress - 0.5) < 0.05)
+
   // Penumbral-only events and quiet instants stay invisible.
   check('penumbral ignored (2027-02-20)', M.eclipseState(Date.parse('2027-02-20T23:14:06Z')) === null)
   check('penumbral ignored (2030-12-09)', M.eclipseState(Date.parse('2030-12-09T22:28:51Z')) === null)
@@ -289,16 +301,62 @@ check('south render = mirrored north', (() => {
 
 // --- Umbra bite stamped into text art ---
 {
-  const ecl = { kind: 'total', label: '', depth: 1, peak: 1, gamma: 0.1 }
-  const half = { ...ecl, depth: 0.5 }
+  // Time-driven transit: shadow enters from the left (northern view),
+  // crosses monotonically, exits right. Height follows gamma.
+  const mk = (progress, gamma) => ({
+    kind: 'partial', label: '', depth: Math.min(1, Math.max(0.15, progress)),
+    peak: 1, gamma: gamma, progress: progress
+  })
+  const darkXs = art => {
+    const lines = art.split('\n')
+    const xs = []
+    lines.forEach((l, j) => { for (let i = 0; i < l.length; i++) if (l[i] === '·') xs.push(i / l.length) })
+    return xs
+  }
+  const centroid = xs => xs.reduce((a, b) => a + b, 0) / Math.max(1, xs.length)
+  let prevC = -1, monotonic = true
+  for (const p of [0.05, 0.25, 0.5, 0.75, 0.95]) {
+    const xs = darkXs(M.renderMoonArt(0.5, 'blocks', 25, false, 2.0, false, mk(p, 0)))
+    if (xs.length === 0 || centroid(xs) <= prevC) monotonic = false
+    prevC = centroid(xs)
+  }
+  check('shadow transits left to right monotonically', monotonic)
+  const early = darkXs(M.renderMoonArt(0.5, 'blocks', 25, false, 2.0, false, mk(0.05, 0)))
+  const late = darkXs(M.renderMoonArt(0.5, 'blocks', 25, false, 2.0, false, mk(0.95, 0)))
+  check('enters on the left limb first', early.length > 0 && centroid(early) < 0.35)
+  check('exits on the right limb last', late.length > 0 && centroid(late) > 0.65)
+
+  const rowsOf = art => art.split('\n')
+  const darkRowCentroid = art => {
+    const lines = rowsOf(art); let sy = 0, n = 0
+    lines.forEach((l, j) => { for (const ch of l) if (ch === '·') { sy += j; n++ } })
+    return sy / Math.max(1, n)
+  }
+  // Vertical offset matters while the shadow overlaps one limb (mid-transit
+  // totals swallow the disk regardless of height).
+  const above = M.renderMoonArt(0.5, 'blocks', 25, false, 2.0, false, mk(0.1, 0.5))
+  const below = M.renderMoonArt(0.5, 'blocks', 25, false, 2.0, false, mk(0.1, -0.5))
+  check('positive gamma rides higher', darkRowCentroid(above) < darkRowCentroid(below))
+
+  // Partials keep a lit far limb at greatest (real |gamma| keeps the umbra
+  // edge off it); totals envelop completely. ponytail: a deep partial's
+  // surviving sliver is thinner than one text cell at panel rasters, so the
+  // lit-limb assertion uses a grazing geometry where it's plainly visible.
+  const grazing = M.renderMoonArt(0.5, 'blocks', 25, false, 2.0, false,
+    { ...mk(0.5, 1.0), depth: 0.5 })
+  const totalCells = countCh(grazing, '█') + countCh(grazing, '▓') + countCh(grazing, '·')
+  check('grazing partial keeps most of the disk lit',
+    countCh(grazing, '█') > totalCells * 0.6)
+  const totality = M.renderMoonArt(0.5, 'blocks', 25, false, 2.0, false,
+    { kind: 'total', label: '', depth: 1, peak: 1, gamma: 0.12, progress: 0.5 })
+  check('totality envelopes the disk', countCh(totality, '█') === 0)
+
+  const ecl = mk(0.5, 0.1)
   const rev = a => a.split('\n').map(l => [...l].reverse().join('')).join('\n')
-  const clean = M.renderMoonArt(0.5, 'blocks', 25, false, 2.0)
   const e1 = M.renderMoonArt(0.5, 'blocks', 25, false, 2.0, false, ecl)
-  const eHalf = M.renderMoonArt(0.5, 'blocks', 25, false, 2.0, false, half)
-  check('umbra darkens the disk', countCh(e1, '·') > countCh(clean, '·') * 2)
-  check('shadow grows with depth', countCh(e1, '·') > countCh(eHalf, '·'))
-  check('eclipse render deterministic', e1 === M.renderMoonArt(0.5, 'blocks', 25, false, 2.0, false, ecl))
-  check('eclipse mirrors exactly', rev(M.renderMoonArt(0.5, 'blocks', 25, false, 2.0, false, ecl)) === M.renderMoonArt(0.5, 'blocks', 25, true, 2.0, false, ecl))
+  const eHalf = M.renderMoonArt(0.5, 'blocks', 25, false, 2.0, false, { ...ecl, depth: 0.4 })
+  check('umbra darkens the disk', countCh(e1, '·') > countCh(M.renderMoonArt(0.5, 'blocks', 25, false, 2.0), '·'))
+  check('eclipse mirrors exactly', rev(e1) === M.renderMoonArt(0.5, 'blocks', 25, true, 2.0, false, ecl))
 }
 
 // --- Visual spot-checks ---

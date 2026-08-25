@@ -291,9 +291,12 @@ function eclipseState(nowMs) {
   for (var i = 0; i <= 1; i++) {
     var e = lunarEclipseAt(kk + i + 0.5)
     if (!e) continue
+    // Full umbral window: partial phases flank greatest on both sides, and
+    // totals add the totality semi-duration beyond each partial phase.
     var maxMs = e.greatestMs
-    var u1 = maxMs - e.semiPartialMs
-    var u4 = maxMs + e.semiPartialMs
+    var half = e.semiPartialMs + (e.kind === "total" ? e.semiTotalMs : 0)
+    var u1 = maxMs - half
+    var u4 = maxMs + half
     if (target < u1 || target > u4) continue
 
     var peak = Math.min(e.magnitude, 1)
@@ -315,6 +318,9 @@ function eclipseState(nowMs) {
       peak: peak,
       gamma: e.gamma,
       greatestMs: maxMs,
+      // 0..1 through the umbral window — drives shadow position so it
+      // transits monotonically across the disk instead of ebbing in place.
+      progress: Math.max(0, Math.min(1, (target - u1) / (u4 - u1))),
       endsMs: u4
     }
   }
@@ -428,22 +434,30 @@ function _stampFace(grid, rowCount, colCount, palette, wink) {
 
 // Stamp Earth's umbral shadow across the disk during an eclipse. Geometry
 // is deliberately simple: a fixed ~2.7-lunar-radius umbra circle (real ratio
-// sigma~0.74 Earth radii vs the Moon's 0.2725) slides in from the dark limb
-// toward its true greatest-eclipse offset (gamma, normalized) as depth
-// grows; for totals the center ends near the disk middle, enveloping it.
-// gamma's vertical component is dropped — horizontal entry reads cleanly.
-function _stampUmbra(grid, rows, cols, palette, dir, eclipse) {
+// sigma~0.74 Earth radii vs the Moon's 0.2725) whose center transits
+// monotonically left to right across the whole event (northern-hemisphere
+// view — the Moon moves eastward into the shadow, which is its left limb as
+// we face it), positioned by eclipse.progress rather than depth so it never
+// retreats the way it came. Vertical placement is each event's real
+// gamma normalized to lunar radii (gamma/0.2725; positive passes north of
+// center = above on screen) — which also keeps partials honest: their large
+// offsets mean the umbra edge never swallows the far limb, while totals'
+// near-central paths envelop it. A gentle cosmetic tilt adds high entry,
+// low exit.
+function _stampUmbra(grid, rows, cols, palette, eclipse) {
   var RU = 2.7
-  var startX = -dir * (RU + 1.15)
-  var prog = eclipse.peak > 0 ? Math.min(1, eclipse.depth / eclipse.peak) : 0
-  var ox = startX + (eclipse.gamma / 0.2725 - startX) * prog
+  var XE = RU + 1.15
+  var ox = -XE + 2 * XE * eclipse.progress
+  var oyMid = -eclipse.gamma / 0.2725
+  var oy = oyMid - 0.6 * (0.5 - eclipse.progress)
   var band = 0.35
   for (var j = 0; j < rows; j++) {
     var y = ((j + 0.5) / rows) * 2 - 1
     for (var i = 0; i < cols; i++) {
       if (grid[j][i] === palette.void) continue
       var dx = ((i + 0.5) / cols) * 2 - 1 - ox
-      var d = Math.sqrt(dx * dx + y * y)
+      var dy = y - oy
+      var d = Math.sqrt(dx * dx + dy * dy)
       if (d <= RU) grid[j][i] = palette.dark
       else if (d <= RU + band) grid[j][i] = palette.term
     }
@@ -505,7 +519,7 @@ function renderMoonArt(fraction, style, rows, mirror, aspect, wink, eclipse) {
 
   _stampSeas(grid, rows, colCount, palette)
   _stampCraters(grid, rows, colCount, palette)
-  if (eclipse && eclipse.depth > 0) _stampUmbra(grid, rows, colCount, palette, waxing ? 1 : -1, eclipse)
+  if (eclipse && eclipse.depth > 0) _stampUmbra(grid, rows, colCount, palette, eclipse)
 
   var lines = []
   for (var k = 0; k < grid.length; k++) {

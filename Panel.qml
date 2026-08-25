@@ -301,8 +301,9 @@ Panel {
     var total = devEclipseStage === 2
     var t = devEclipseT
     // Depth profile: partial swells to its peak and back; total ramps into
-    // a totality plateau, then out. Gamma sweeps across the face so the
-    // shadow exits the far limb instead of retreating the way it came.
+    // a totality plateau, then out. Shadow position is time-driven (see
+    // Model._stampUmbra); the two flavors carry realistic gammas so one
+    // passes below the disk and the other slightly above, like real events.
     var peak = total ? 1.0 : 0.93
     var d
     if (!total) d = peak * (t <= 0.5 ? t / 0.5 : (1 - t) / 0.5)
@@ -312,7 +313,8 @@ Panel {
     return { kind: total ? "total" : "partial",
              label: total ? "Total Lunar Eclipse" : "Partial Lunar Eclipse",
              depth: Math.max(0, Math.min(1, d)), peak: peak,
-             gamma: -0.6 + 1.2 * t }
+             gamma: total ? 0.12 : -0.5,
+             progress: t }
   }
 
   function cycleDevEclipse() {
@@ -651,12 +653,17 @@ Panel {
                 ctx.clip()
                 ctx.fillStyle = "rgba(186,62,48," + Math.min(1, ecl.depth * 0.72) + ")"
                 ctx.fillRect(0, 0, w, h)
+                // Umbra center: time-driven transit (matches the text art
+                // stamp); flipped for southern hemisphere like everything
+                // else canvas-drawn.
                 var RUv = R * 2.7
-                var progV = ecl.peak > 0 ? Math.min(1, ecl.depth / ecl.peak) : 0
-                var startV = -dir * (RUv + 1.15 * R)
-                var oxV = startV + (ecl.gamma / 0.2725 * R - startV) * progV
+                var XEv = RUv + 1.15 * R
+                var flipV = root.southUp ? -1 : 1
+                var oxV = flipV * (-XEv + 2 * XEv * ecl.progress)
+                var oyMidV = -ecl.gamma / 0.2725 * R
+                var oyV = oyMidV - 0.6 * R * (0.5 - ecl.progress)
                 var coreA = 0.55 * Math.min(1, ecl.depth)
-                var gv = ctx.createRadialGradient(cx + oxV, cy, R * 0.1, cx + oxV, cy, RUv)
+                var gv = ctx.createRadialGradient(cx + oxV, cy + oyV, R * 0.1, cx + oxV, cy + oyV, RUv)
                 gv.addColorStop(0, "rgba(52,8,8," + coreA + ")")
                 gv.addColorStop(0.7, "rgba(52,8,8," + coreA * 0.8 + ")")
                 gv.addColorStop(1, "rgba(52,8,8,0)")
@@ -786,15 +793,18 @@ function paintHose(ctx, w, h) {
               ctx.restore()
 
               // Eclipse: denser cross-hatch inside the umbra, ink-only so
-              // the style stays monochrome. Same slide-in geometry as the
-              // text art (radius ~2.7 lunar radii toward the gamma offset).
+              // the style stays monochrome. Same time-driven transit
+              // geometry as the text art stamp.
               if (root.artEclipse && root.artEclipse.depth > 0) {
                 var ecl = root.artEclipse
                 var RUh = k * 2.7
-                var progH = ecl.peak > 0 ? Math.min(1, ecl.depth / ecl.peak) : 0
-                var startH = -dir * (RUh + 1.15 * k)
-                var oxH = startH + (ecl.gamma / 0.2725 * k - startH) * progH
+                var XEh = RUh + 1.15 * k
+                var flipH = root.southUp ? -1 : 1
+                var oxH = flipH * (-XEh + 2 * XEh * ecl.progress)
+                var oyMidH = -ecl.gamma / 0.2725 * k
+                var oyH = oyMidH - 0.6 * k * (0.5 - ecl.progress)
                 var ucx = cx + oxH
+                var ucy = cy + oyH
                 ctx.save()
                 ctx.beginPath()
                 ctx.arc(cx, cy, k * 0.97, 0, 2 * Math.PI)
@@ -807,8 +817,8 @@ function paintHose(ctx, w, h) {
                   var xy = xl * k * 0.055 // offsets about the umbra center
                   var vx1 = -k * 1.6, vy1 = xy, vx2 = k * 1.6
                   ctx.beginPath()
-                  ctx.moveTo(ucx + vx1 * xca - vy1 * xsa, cy + vx1 * xsa + vy1 * xca)
-                  ctx.lineTo(ucx + vx2 * xca - vy1 * xsa, cy + vx2 * xsa + vy1 * xca)
+                  ctx.moveTo(ucx + vx1 * xca - vy1 * xsa, ucy + vx1 * xsa + vy1 * xca)
+                  ctx.lineTo(ucx + vx2 * xca - vy1 * xsa, ucy + vx2 * xsa + vy1 * xca)
                   ctx.stroke()
                 }
                 ctx.restore()
