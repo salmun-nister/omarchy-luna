@@ -220,6 +220,87 @@ check('south render = mirrored north', (() => {
   check('other seas do not trigger', M.seaHit((pc.x + 1) / 2, (pc.y + 1) / 2, false) === false)
 }
 
+// --- Lunar eclipses: Meeus ch.54 port vs NASA GSFC catalog (2026–2035) ---
+// Ground truth: NASA decade tables (TD of greatest eclipse; UT differs by
+// ΔT ≈ 70 s, absorbed by tolerances).
+{
+  const FIX = [
+    ['2026-08-28T04:14:04Z', 'partial', 0.930],
+    ['2028-01-12T04:14:13Z', 'partial', 0.066],
+    ['2028-07-06T18:20:57Z', 'partial', 0.389],
+    ['2028-12-31T16:53:15Z', 'total', 1.246],
+    ['2029-06-26T03:23:22Z', 'total', 1.844],
+    ['2029-12-20T22:43:12Z', 'total', 1.117],
+    ['2030-06-15T18:34:34Z', 'partial', 0.502],
+    ['2032-04-25T15:14:51Z', 'total', 1.191],
+    ['2032-10-18T19:03:40Z', 'total', 1.103],
+    ['2033-04-14T19:13:51Z', 'total', 1.094],
+    ['2033-10-08T10:56:23Z', 'total', 1.350],
+    ['2034-09-28T02:47:37Z', 'partial', 0.014],
+    ['2035-08-19T01:12:15Z', 'partial', 0.104]
+  ]
+  const lunationOf = t => Math.floor((t - M.EPOCH_MS) / (M.SYNODIC_DAYS * MS_DAY))
+  let worstMin = 0, worstMag = 0
+  for (const [iso, type, mag] of FIX) {
+    const truth = Date.parse(iso)
+    const e = M.lunarEclipseAt(lunationOf(truth) + 0.5)
+    if (!e) { failures++; console.log(`FAIL eclipse ${iso}: no event found`); continue }
+    worstMin = Math.max(worstMin, Math.abs(e.greatestMs - truth) / 60000)
+    worstMag = Math.max(worstMag, Math.abs(e.magnitude - mag))
+    if (Math.abs(e.greatestMs - truth) > 10 * 60000) {
+      failures++; console.log(`FAIL eclipse ${iso}: off by ${(e.greatestMs - truth) / 60000} min`)
+    }
+    if (Math.abs(e.magnitude - mag) > 0.05) {
+      failures++; console.log(`FAIL eclipse ${iso}: mag ${e.magnitude.toFixed(3)} vs ${mag}`)
+    }
+    if (e.kind !== type) {
+      failures++; console.log(`FAIL eclipse ${iso}: ${e.kind} vs ${type}`)
+    }
+  }
+  check('eclipse fixtures within tolerance', true,
+    `worst ${worstMin.toFixed(2)} min / ${worstMag.toFixed(4)} mag`)
+}
+{
+  // State machine around the Aug 2026 partial (semi-duration ~99 min).
+  const g = Date.parse('2026-08-28T04:14:04Z')
+  const nearGreatest = M.eclipseState(g)
+  check('eclipse active at greatest', !!nearGreatest && nearGreatest.kind === 'partial')
+  check('eclipse label', nearGreatest.label === 'Partial Lunar Eclipse')
+  const atGreatest = M.eclipseState(nearGreatest.greatestMs)
+  check('depth peaks at greatest', Math.abs(atGreatest.depth - atGreatest.peak) < 1e-9)
+  const ingress = M.eclipseState(g - 60 * 60000)
+  check('depth ramps up during ingress', ingress.depth > 0 && ingress.depth < nearGreatest.depth)
+  check('no eclipse before U1', M.eclipseState(g - 5 * 3600000) === null)
+  check('no eclipse after U4', M.eclipseState(g + 5 * 3600000) === null)
+
+  // Totality plateau: 2029 Jun 26, total phase 1h42m.
+  const tg = Date.parse('2029-06-26T03:23:22Z')
+  const before = M.eclipseState(tg - 20 * 60000)
+  const during = M.eclipseState(tg + 20 * 60000)
+  check('totality is total', before.kind === 'total' && during.kind === 'total'
+    && before.label === 'Total Lunar Eclipse')
+  check('depth plateaus through totality', before.depth === 1 && during.depth === 1)
+
+  // Penumbral-only events and quiet instants stay invisible.
+  check('penumbral ignored (2027-02-20)', M.eclipseState(Date.parse('2027-02-20T23:14:06Z')) === null)
+  check('penumbral ignored (2030-12-09)', M.eclipseState(Date.parse('2030-12-09T22:28:51Z')) === null)
+  check('no eclipse today', M.eclipseState(ms('2026-08-24T12:00:00Z')) === null)
+}
+
+// --- Umbra bite stamped into text art ---
+{
+  const ecl = { kind: 'total', label: '', depth: 1, peak: 1, gamma: 0.1 }
+  const half = { ...ecl, depth: 0.5 }
+  const rev = a => a.split('\n').map(l => [...l].reverse().join('')).join('\n')
+  const clean = M.renderMoonArt(0.5, 'blocks', 25, false, 2.0)
+  const e1 = M.renderMoonArt(0.5, 'blocks', 25, false, 2.0, false, ecl)
+  const eHalf = M.renderMoonArt(0.5, 'blocks', 25, false, 2.0, false, half)
+  check('umbra darkens the disk', countCh(e1, '·') > countCh(clean, '·') * 2)
+  check('shadow grows with depth', countCh(e1, '·') > countCh(eHalf, '·'))
+  check('eclipse render deterministic', e1 === M.renderMoonArt(0.5, 'blocks', 25, false, 2.0, false, ecl))
+  check('eclipse mirrors exactly', rev(M.renderMoonArt(0.5, 'blocks', 25, false, 2.0, false, ecl)) === M.renderMoonArt(0.5, 'blocks', 25, true, 2.0, false, ecl))
+}
+
 // --- Visual spot-checks ---
 console.log('\n--- visual: full moon w/ seas + craters, 19 rows @ aspect 2.333 ---')
 console.log(M.renderMoonArt(0.5, 'blocks', 19, false, 2.333))
