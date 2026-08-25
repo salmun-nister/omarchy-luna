@@ -297,7 +297,7 @@ function _stampFace(grid, rowCount, colCount, palette, wink) {
 // it from the rendering font); columns are derived from it so the disk stays
 // circular instead of assuming square cells. style: "blocks" | "ascii".
 // ("vector" and "cartoon" are canvas-drawn and get blank placeholder grids.)
-// ponytail: inputs assumed caller-normalized — Panel.artRows clamps 9–41 odd,
+// Inputs assumed caller-normalized: Panel.artRows clamps 9–41 (odd),
 // Panel.artCellAspect clamps 1.2–3; tests pass literals.
 function renderMoonArt(fraction, style, rows, mirror, aspect, wink) {
   var palette = PALETTES[style] === undefined ? PALETTES.blocks : PALETTES[style]
