@@ -15,8 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tint the bar pill toward the theme's alert color as depth grows; the
   tooltip and right-click notification mention the event too. Penumbral-only
   events are skipped — they're invisible to the eye anyway.
-- Dev test mode extension: `E` cycles an eclipse preview off → partial →
-  total so all styles can be watched without waiting for a real event.
+- Dev test mode extension: `E` steps an eclipse preview through the
+  shadow's timeline — entering → deepening → totality → waning → leaving →
+  off. Any active preview pins the phase at full moon, since lunar eclipses
+  only happen there.
 
 ### Verified
 

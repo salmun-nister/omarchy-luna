@@ -267,7 +267,8 @@ Panel {
     id: devCycle
     interval: 1000
     repeat: true
-    running: root.devMode && root.opened
+    // Eclipse preview pins the phase at full moon, so nothing to advance.
+    running: root.devMode && root.devEclipseStage === 0 && root.opened
     onTriggered: root.devFraction = (root.devFraction + 0.05) % 1.0
   }
 
@@ -279,22 +280,35 @@ Panel {
     remainMs = nextWinkMs()
   }
 
-  // Eclipse preview: while dev mode is on, E cycles off -> partial -> total.
-  // Synthetic gamma values mimic a typical shadow crossing either limb.
-  property int devEclipseStage: 0
+  // Eclipse preview: while dev mode is on, E steps a near-central total
+  // eclipse through its timeline — shadow entering, deepening, totality,
+  // waning, leaving — then off. Lunar eclipses only happen at full moon,
+  // so any active preview also pins the phase there (see displayFraction).
+  property int devEclipseStage: 0   // 0 = off · 1..5 = timeline points
 
-  readonly property var devEclipsePreview: devEclipseStage === 1
-      ? { kind: "partial", label: "Partial Lunar Eclipse", depth: 0.55, peak: 0.55, gamma: -0.5 }
-      : devEclipseStage === 2
-        ? { kind: "total", label: "Total Lunar Eclipse", depth: 1, peak: 1, gamma: 0.05 }
-        : null
+  readonly property var _devEclipseTimeline: [
+    null,
+    { depth: 0.22 },   // just past first contact: sliver of umbra
+    { depth: 0.60 },   // deep partial bite
+    { depth: 1.00 },   // totality — fully enveloped
+    { depth: 0.60 },   // waning on the far limb
+    { depth: 0.22 }    // last sliver before fourth contact
+  ]
+
+  readonly property var devEclipsePreview: {
+    var s = _devEclipseTimeline[devEclipseStage]
+    return s ? { kind: s.depth >= 1 ? "total" : "partial",
+                 label: s.depth >= 1 ? "Total Lunar Eclipse" : "Partial Lunar Eclipse",
+                 depth: s.depth, peak: 1.0, gamma: 0.05 } : null
+  }
 
   function cycleDevEclipse() {
     if (!devMode) return
-    devEclipseStage = (devEclipseStage + 1) % 3
+    devEclipseStage = (devEclipseStage + 1) % _devEclipseTimeline.length
   }
 
-  readonly property real displayFraction: devMode ? devFraction : phase.fraction
+  readonly property real displayFraction: devEclipsePreview ? 0.5
+      : devMode ? devFraction : phase.fraction
   // Panel-side phase info follows dev mode; the bar pill keeps the real moon.
   // Vector-style easter egg: tapping the smile sticks the tongue out
   // for a moment before it slides back in.
@@ -1342,7 +1356,8 @@ function paintHose(ctx, w, h) {
             anchors.rightMargin: Style.space(10)
             anchors.verticalCenter: parent.verticalCenter
             visible: root.devMode && root.devEclipseStage > 0
-            text: root.devEclipseStage === 2 ? "Eclipse:T" : "Eclipse:P"
+            text: root.devEclipsePreview && root.devEclipsePreview.kind === "total"
+                  ? "Eclipse:T" : "Eclipse:P"
             color: Color.urgent
             font.bold: true
             font.family: root.bar.fontFamily
