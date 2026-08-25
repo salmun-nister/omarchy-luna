@@ -280,31 +280,45 @@ Panel {
     remainMs = nextWinkMs()
   }
 
-  // Eclipse preview: while dev mode is on, E steps a near-central total
-  // eclipse through its timeline — shadow entering, deepening, totality,
-  // waning, leaving — then off. Lunar eclipses only happen at full moon,
-  // so any active preview also pins the phase there (see displayFraction).
-  property int devEclipseStage: 0   // 0 = off · 1..5 = timeline points
+  // Eclipse preview: while dev mode is on, E picks what animates — first
+  // press runs a partial eclipse start-to-end, second a total one, third
+  // switches off. Each sweep loops until changed. Lunar eclipses only happen
+  // at full moon, so any active preview also pins the phase there (see
+  // displayFraction).
+  property int devEclipseStage: 0   // 0 = off · 1 = partial anim · 2 = total anim
+  property real devEclipseT: 0      // 0..1 progress through the event
 
-  readonly property var _devEclipseTimeline: [
-    null,
-    { depth: 0.22 },   // just past first contact: sliver of umbra
-    { depth: 0.60 },   // deep partial bite
-    { depth: 1.00 },   // totality — fully enveloped
-    { depth: 0.60 },   // waning on the far limb
-    { depth: 0.22 }    // last sliver before fourth contact
-  ]
+  Timer {
+    id: devEclipseAnim
+    interval: 100                   // 100 ticks × 0.01 = 10 s per sweep
+    repeat: true
+    running: root.devMode && root.devEclipseStage > 0 && root.opened
+    onTriggered: root.devEclipseT = (root.devEclipseT + 0.01) % 1.0
+  }
 
   readonly property var devEclipsePreview: {
-    var s = _devEclipseTimeline[devEclipseStage]
-    return s ? { kind: s.depth >= 1 ? "total" : "partial",
-                 label: s.depth >= 1 ? "Total Lunar Eclipse" : "Partial Lunar Eclipse",
-                 depth: s.depth, peak: 1.0, gamma: 0.05 } : null
+    if (devEclipseStage === 0 || !devMode) return null
+    var total = devEclipseStage === 2
+    var t = devEclipseT
+    // Depth profile: partial swells to its peak and back; total ramps into
+    // a totality plateau, then out. Gamma sweeps across the face so the
+    // shadow exits the far limb instead of retreating the way it came.
+    var peak = total ? 1.0 : 0.93
+    var d
+    if (!total) d = peak * (t <= 0.5 ? t / 0.5 : (1 - t) / 0.5)
+    else if (t < 0.3) d = t / 0.3
+    else if (t <= 0.7) d = 1.0
+    else d = (1 - t) / 0.3
+    return { kind: total ? "total" : "partial",
+             label: total ? "Total Lunar Eclipse" : "Partial Lunar Eclipse",
+             depth: Math.max(0, Math.min(1, d)), peak: peak,
+             gamma: -0.6 + 1.2 * t }
   }
 
   function cycleDevEclipse() {
     if (!devMode) return
-    devEclipseStage = (devEclipseStage + 1) % _devEclipseTimeline.length
+    devEclipseStage = (devEclipseStage + 1) % 3
+    devEclipseT = 0                 // every selection starts at first contact
   }
 
   readonly property real displayFraction: devEclipsePreview ? 0.5
