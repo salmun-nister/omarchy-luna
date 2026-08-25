@@ -144,16 +144,27 @@ Panel {
 
   readonly property var phase: Model.moonState(clock.date.getTime(), southUp)
 
-  // What the bar pill shows: emoji, or the monochrome themed glyph when the
-  // plainIcon setting is on. Notifications and tooltip keep the emoji.
-  readonly property string pillGlyph: plainIcon
-      ? Model.plainGlyphFor(phase.fraction, southUp)
-      : phase.glyph
-  readonly property string label: pillGlyph + (showPercent ? " " + phase.illuminationPct + "%" : "")
-  readonly property string tooltipText: phase.phaseName + " · " + phase.illuminationPct + "% illuminated"
-  readonly property string notificationSummary: phase.glyph + " " + phase.phaseName + " — " + phase.illuminationPct + "% illuminated"
+  // Active umbral lunar eclipse, or null. Null outside U1..U4 windows and
+  // for penumbral-only events (Model skips those by design).
+  readonly property var eclipse: Model.eclipseState(clock.date.getTime())
 
-  readonly property string moonArt: Model.renderMoonArt(displayFraction, artStyle, artRows, southUp, artCellAspect, winkNow)
+  // What the bar pill shows: emoji, or the monochrome themed glyph when the
+  // plainIcon setting is on. Notifications keep the real moon's emoji.
+  readonly property string pillGlyph: plainIcon
+      ? Model.plainGlyphFor(displayPhase.fraction, southUp)
+      : displayPhase.glyph
+  readonly property string label: pillGlyph + (showPercent ? " " + displayPhase.illuminationPct + "%" : "")
+  readonly property string tooltipText: displayPhase.phaseName + " · " + displayPhase.illuminationPct + "% illuminated"
+      + (artEclipse ? " — " + artEclipse.label : "")
+  readonly property string notificationSummary: phase.glyph + " " + phase.phaseName + " — " + phase.illuminationPct + "% illuminated"
+      + (eclipse ? " (" + eclipse.label + ")" : "")
+
+  // Eclipse state driving all visuals: real event XOR dev preview.
+  readonly property var artEclipse: devMode ? devEclipsePreview : eclipse
+  // Pill styling inputs for BarWidget (tint on plain glyph, halo on emoji).
+  readonly property real pillEclipseDepth: artEclipse ? artEclipse.depth : 0
+
+  readonly property string moonArt: Model.renderMoonArt(displayFraction, artStyle, artRows, southUp, artCellAspect, winkNow, artEclipse)
 
   // Decorative sky around the disk: REGENERATED with new random positions
   // every time the popup opens or the style changes. Rejection sampling
@@ -263,8 +274,24 @@ Panel {
   function toggleDev() {
     devMode = !devMode
     if (devMode) devFraction = phase.fraction
+    else devEclipseStage = 0
     // Re-arm the wink heartbeat so the new cadence applies at once.
     remainMs = nextWinkMs()
+  }
+
+  // Eclipse preview: while dev mode is on, E cycles off -> partial -> total.
+  // Synthetic gamma values mimic a typical shadow crossing either limb.
+  property int devEclipseStage: 0
+
+  readonly property var devEclipsePreview: devEclipseStage === 1
+      ? { kind: "partial", label: "Partial Lunar Eclipse", depth: 0.55, peak: 0.55, gamma: -0.5 }
+      : devEclipseStage === 2
+        ? { kind: "total", label: "Total Lunar Eclipse", depth: 1, peak: 1, gamma: 0.05 }
+        : null
+
+  function cycleDevEclipse() {
+    if (!devMode) return
+    devEclipseStage = (devEclipseStage + 1) % 3
   }
 
   readonly property real displayFraction: devMode ? devFraction : phase.fraction
@@ -357,6 +384,12 @@ Panel {
         contentH: panel.contentHeight,
         egg: root.eggRunning,
         dev: root.devMode,
+        eclipse: (function() {
+          var e = root.artEclipse
+          if (!e) return null
+          return { kind: e.kind, depth: Math.round(e.depth * 1000) / 1000,
+                   label: e.label, devPreview: root.devMode }
+        })(),
         plainIcon: root.plainIcon,
         frac: Math.round(root.displayFraction * 1000) / 1000,
         scene: {
@@ -397,6 +430,7 @@ Panel {
       onTextKey: function(t) {
         if (t === "s" || t === "S") root.cycleArtStyle()
         else if (t === "i" || t === "I") root.togglePlainIcon()
+        else if (t === "e" || t === "E") root.cycleDevEclipse()
         else if (t === "?") root.toggleDev()
       }
       onCloseRequested: root.close()
@@ -414,6 +448,17 @@ Panel {
           color: root.bar.foreground
           font.family: root.bar ? root.bar.fontFamily : Style.font.family
           font.pixelSize: Style.font.subtitle
+          font.bold: true
+          horizontalAlignment: Text.AlignHCenter
+        }
+
+        Text {
+          width: parent.width
+          visible: root.artEclipse !== null
+          text: root.artEclipse ? root.artEclipse.label : ""
+          color: Color.urgent
+          font.family: root.bar ? root.bar.fontFamily : Style.font.family
+          font.pixelSize: Style.font.bodySmall
           font.bold: true
           horizontalAlignment: Text.AlignHCenter
         }
@@ -445,7 +490,12 @@ Panel {
             anchors.centerIn: parent
             text: root.moonArt
             textFormat: Text.PlainText
-            color: root.bar.foreground
+            // During an eclipse the whole disk shifts red with depth.
+            color: {
+              var d = root.artEclipse ? root.artEclipse.depth : 0
+              if (d <= 0) return root.bar.foreground
+              return Qt.tint(root.bar.foreground, Qt.rgba(Color.urgent.r, Color.urgent.g, Color.urgent.b, Math.min(1, d * 0.85)))
+            }
             font.family: "monospace"
             font.pixelSize: Style.font.caption
 
@@ -481,7 +531,8 @@ Panel {
             readonly property var _sig: [
               width, height, root.displayFraction, root.winkNow, root.southUp,
               root.artStyle, root.tongueOut,
-              root.bar ? root.bar.foreground.toString() : ""
+              root.bar ? root.bar.foreground.toString() : "",
+              JSON.stringify(root.artEclipse)
             ]
             on_SigChanged: requestPaint()
             onVisibleChanged: if (visible) requestPaint()
@@ -560,6 +611,31 @@ Panel {
                 ctx.fill()
               }
               ctx.restore()
+
+              // Eclipse: wash the whole disk toward blood red with depth,
+              // then darken the umbra core with a soft radial gradient.
+              // Drawn before the face so the character stays readable.
+              if (root.artEclipse && root.artEclipse.depth > 0) {
+                var ecl = root.artEclipse
+                ctx.save()
+                ctx.beginPath()
+                ctx.arc(cx, cy, R, 0, 2 * Math.PI)
+                ctx.clip()
+                ctx.fillStyle = "rgba(186,62,48," + Math.min(1, ecl.depth * 0.72) + ")"
+                ctx.fillRect(0, 0, w, h)
+                var RUv = R * 2.7
+                var progV = ecl.peak > 0 ? Math.min(1, ecl.depth / ecl.peak) : 0
+                var startV = -dir * (RUv + 1.15 * R)
+                var oxV = startV + (ecl.gamma / 0.2725 * R - startV) * progV
+                var coreA = 0.55 * Math.min(1, ecl.depth)
+                var gv = ctx.createRadialGradient(cx + oxV, cy, R * 0.1, cx + oxV, cy, RUv)
+                gv.addColorStop(0, "rgba(52,8,8," + coreA + ")")
+                gv.addColorStop(0.7, "rgba(52,8,8," + coreA * 0.8 + ")")
+                gv.addColorStop(1, "rgba(52,8,8,0)")
+                ctx.fillStyle = gv
+                ctx.fillRect(0, 0, w, h)
+                ctx.restore()
+              }
 
               // Face: dot eyes (right one winks into a closed lid) and a smile.
               ctx.fillStyle = INK
@@ -680,6 +756,35 @@ function paintHose(ctx, w, h) {
                 ctx.stroke()
               }
               ctx.restore()
+
+              // Eclipse: denser cross-hatch inside the umbra, ink-only so
+              // the style stays monochrome. Same slide-in geometry as the
+              // text art (radius ~2.7 lunar radii toward the gamma offset).
+              if (root.artEclipse && root.artEclipse.depth > 0) {
+                var ecl = root.artEclipse
+                var RUh = k * 2.7
+                var progH = ecl.peak > 0 ? Math.min(1, ecl.depth / ecl.peak) : 0
+                var startH = -dir * (RUh + 1.15 * k)
+                var oxH = startH + (ecl.gamma / 0.2725 * k - startH) * progH
+                var ucx = cx + oxH
+                ctx.save()
+                ctx.beginPath()
+                ctx.arc(cx, cy, k * 0.97, 0, 2 * Math.PI)
+                ctx.clip()
+                ctx.strokeStyle = inkA(Math.min(0.65, 0.22 + 0.45 * ecl.depth))
+                ctx.lineWidth = Math.max(1, k * 0.012)
+                var xa = 0.23
+                var xca = Math.cos(xa), xsa = Math.sin(xa)
+                for (var xl = -16; xl <= 16; xl++) {
+                  var xy = xl * k * 0.055 // offsets about the umbra center
+                  var vx1 = -k * 1.6, vy1 = xy, vx2 = k * 1.6
+                  ctx.beginPath()
+                  ctx.moveTo(ucx + vx1 * xca - vy1 * xsa, cy + vx1 * xsa + vy1 * xca)
+                  ctx.lineTo(ucx + vx2 * xca - vy1 * xsa, cy + vx2 * xsa + vy1 * xca)
+                  ctx.stroke()
+                }
+                ctx.restore()
+              }
 
               // Craters: thin outlined ellipses (reference layout), shown
               // on the lit surface only.
@@ -1211,7 +1316,7 @@ function paintHose(ctx, w, h) {
           Text {
             id: hintLabel
             anchors.centerIn: parent
-            text: "[S] Style · [I] Icon"
+            text: "[S] Style · [I] Icon" + (root.devMode ? " · [E] Eclipse" : "")
             color: Qt.darker(root.bar.foreground, 1.5)
             font.family: root.bar.fontFamily
             font.pixelSize: Style.font.bodySmall
@@ -1219,12 +1324,26 @@ function paintHose(ctx, w, h) {
 
           // Dev badge appears only while dev mode is active.
           Text {
+            id: devBadge
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
             visible: root.devMode
             text: "Dev"
             color: Color.accent
             font.underline: true
+            font.bold: true
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.bodySmall
+          }
+
+          // Eclipse preview badge sits left of the Dev badge.
+          Text {
+            anchors.right: devBadge.visible ? devBadge.left : parent.right
+            anchors.rightMargin: Style.space(10)
+            anchors.verticalCenter: parent.verticalCenter
+            visible: root.devMode && root.devEclipseStage > 0
+            text: root.devEclipseStage === 2 ? "Eclipse:T" : "Eclipse:P"
+            color: Color.urgent
             font.bold: true
             font.family: root.bar.fontFamily
             font.pixelSize: Style.font.bodySmall

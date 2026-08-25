@@ -44,6 +44,11 @@ BarWidget {
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
+  // Eclipse accent inputs, read off the live panel state (real event XOR dev
+  // preview). Depth 0..1 scales both effects; kind is irrelevant here.
+  readonly property real eclipseDepth: panelLoader.item ? panelLoader.item.pillEclipseDepth : 0
+  readonly property bool pillIsPlainGlyph: panelLoader.item ? panelLoader.item.plainIcon === true : false
+
   onBarChanged: injectPanel()
   onSettingsChanged: injectPanel()
 
@@ -58,6 +63,19 @@ BarWidget {
     }
   }
 
+  // Emoji bitmaps ignore text colors, so during an eclipse a soft red halo
+  // sits behind the button instead. Only for the emoji flavor; the plain
+  // glyph gets its foreground tinted below.
+  Rectangle {
+    anchors.centerIn: button
+    visible: root.bar && root.eclipseDepth > 0 && !root.pillIsPlainGlyph
+    width: Math.min(button.implicitWidth, button.implicitHeight) * 1.25
+    height: width
+    radius: width / 2
+    color: root.bar ? root.bar.urgent : "transparent"
+    opacity: 0.10 + 0.28 * root.eclipseDepth
+  }
+
   BarIconButton {
     id: button
     anchors.fill: parent
@@ -65,6 +83,13 @@ BarWidget {
     text: panelLoader.item ? panelLoader.item.label : ""
     slotSize: Style.bar.statusSlot
     tooltipText: panelLoader.item ? panelLoader.item.tooltipText : ""
+
+    // During an eclipse the plain glyph shifts toward the theme's urgent
+    // color with depth (Binding restores the default when inactive).
+    Binding on foreground {
+      when: root.pillIsPlainGlyph && root.eclipseDepth > 0 && root.bar !== null
+      value: Qt.tint(root.bar.foreground, Qt.rgba(root.bar.urgent.r, root.bar.urgent.g, root.bar.urgent.b, Math.min(1, root.eclipseDepth * 0.9)))
+    }
 
     // The plain-icon glyph lives in the Nerd Font PUA range, where unrelated
     // fonts (Material Symbols, CJK fonts) claim overlapping slots. The bar's

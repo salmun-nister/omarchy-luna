@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5] — 2026-08-24
+
+### Added
+
+- Lunar eclipse support, fully offline (Meeus "Astronomical Algorithms"
+  ch. 54 lunar section). Umbral eclipses show a red label under the phase
+  name in the panel, darken the moon art where Earth's shadow falls, and
+  tint the bar pill toward the theme's alert color as depth grows; the
+  tooltip and right-click notification mention the event too. Penumbral-only
+  events are skipped — they're invisible to the eye anyway.
+- Dev test mode extension: `E` cycles an eclipse preview off → partial →
+  total so all styles can be watched without waiting for a real event.
+
+### Verified
+
+- Greatest-eclipse times within ~1 minute and umbral magnitudes within 0.01
+  of NASA's catalog across all 13 umbral events from 2026 to 2035 (test
+  suite fixtures).
+
 ## [0.1.4] — 2026-08-24
 
 ### Changed

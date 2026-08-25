@@ -28,6 +28,12 @@ omarchy bar move salmun-nister.luna --section right
 - **Right-click** the pill — desktop notification summarizing the phase
 - **Tab** while the popup is open — switch to the neighboring panel
 
+During a (umbral) lunar eclipse the panel shows a red "Partial/Total Lunar
+Eclipse" line under the phase name, the moon art darkens under Earth's
+shadow, and the bar pill shifts toward your theme's alert color with eclipse
+depth. Nothing to configure — it happens when it happens (next visible one:
+August 28, 2026).
+
 The disk is rendered at the exact phase fraction with lunar features loosely
 inspired by the real near side: craters (Tycho, Copernicus, Kepler,
 Aristarchus, Plato, Gassendi, Langrenus, Grimaldi) and dark maria (Imbrium,
@@ -69,6 +75,13 @@ periodic corrections from Meeus' "Astronomical Algorithms" (ch. 49) bring each
 predicted instant to within a few minutes of true syzygy near J2000 (verified
 against 2026 almanac data; a plain mean-month model drifts by up to half a day
 and can even name the wrong day).
+
+Lunar eclipses are computed with Meeus ch. 54 (lunar section) and validated
+against NASA's catalog of 2026–2035 events: greatest-eclipse times within a
+minute, umbral magnitudes within a few hundredths. Only *umbral* eclipses are
+shown — penumbral-only events dim too subtly to see and are skipped. During an
+eclipse the panel labels it, the art darkens under the shadow, and the bar
+pill shifts red with depth.
 
 ## Update
 
