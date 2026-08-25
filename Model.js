@@ -187,6 +187,146 @@ function nextFullMoonMs(nowMs) {
   return nextLunationMs(nowMs, 0.5, FULL_MOON_COEFFS)
 }
 
+// ---- Lunar eclipses ---------------------------------------------------------
+// Port of Meeus, "Astronomical Algorithms" ch. 54 (lunar section), following
+// the astronomia library's transcription (MIT). Reuses the ch. 49 mean
+// elements; predicts greatest-eclipse instants and umbral magnitudes to
+// ~a minute near J2000. Penumbral-only events are treated as no eclipse.
+
+// Circumstances of the umbral eclipse at fractional lunation kf (full moon
+// when the fraction is 0.5). Returns null when that lunation carries no
+// umbral eclipse (no event at all, or penumbral only).
+function lunarEclipseAt(kf) {
+  var T = kf / 1236.85
+  var F = DEG2RAD * (160.7108 + 390.67050284 * kf
+      - 0.0016118 * T * T - 0.00000227 * T * T * T
+      + 0.000000011 * T * T * T * T)
+  // |sin F| > 0.36: no lunar eclipse at this lunation (Meeus 54.2).
+  if (Math.abs(Math.sin(F)) > 0.36) return null
+
+  var el = lunationMeanElements(kf)
+  // Naming hazard: el.Mp is the SUN's anomaly, el.Mm the MOON's.
+  var Msun = el.Mp
+  var Mmoon = el.Mm
+  var E = el.E
+  var sOm = Math.sin(el.Om)
+
+  var F1 = F - DEG2RAD * 0.02665 * sOm
+  var A1 = DEG2RAD * (299.77 + 0.107408 * kf - 0.009173 * T)
+
+  // Greatest eclipse time (Meeus 54.1 with the full-moon coefficients).
+  var jdeMax = 2451550.09766 + 29.530588861 * kf
+      + 0.00015437 * T * T
+      - 0.000000150 * T * T * T
+      + 0.00000000073 * T * T * T * T
+      - 0.4065 * Math.sin(Mmoon)
+      + 0.1727 * Math.sin(Msun) * E
+      + 0.0161 * Math.sin(2 * Mmoon)
+      - 0.0097 * Math.sin(2 * F1)
+      + 0.0073 * Math.sin(Mmoon - Msun) * E
+      - 0.005 * Math.sin(Mmoon + Msun) * E
+      - 0.0023 * Math.sin(Mmoon - 2 * F1)
+      + 0.0021 * Math.sin(2 * Msun) * E
+      + 0.0012 * Math.sin(Mmoon + 2 * F1)
+      + 0.0006 * Math.sin(2 * Mmoon + Msun) * E
+      - 0.0004 * Math.sin(3 * Mmoon)
+      - 0.0003 * Math.sin(Msun + 2 * F1) * E
+      + 0.0003 * Math.sin(A1)
+      - 0.0002 * Math.sin(Msun - 2 * F1) * E
+      - 0.0002 * Math.sin(2 * Mmoon - Msun) * E
+      - 0.0002 * sOm
+
+  // Shadow geometry: gamma = shadow-axis distance from Moon center, u =
+  // umbra-size correction; both in Earth equatorial radii (Meeus p. 380).
+  var P = 0.207 * Math.sin(Msun) * E
+      + 0.0024 * Math.sin(2 * Msun) * E
+      - 0.0392 * Math.sin(Mmoon)
+      + 0.0116 * Math.sin(2 * Mmoon)
+      - 0.0073 * Math.sin(Mmoon + Msun) * E
+      + 0.0067 * Math.sin(Mmoon - Msun) * E
+      + 0.0118 * Math.sin(2 * F1)
+  var Q = 5.2207
+      - 0.0048 * Math.cos(Msun) * E
+      + 0.002 * Math.cos(2 * Msun) * E
+      - 0.3299 * Math.cos(Mmoon)
+      - 0.006 * Math.cos(Mmoon + Msun) * E
+      + 0.0041 * Math.cos(Mmoon - Msun) * E
+  var W = Math.abs(Math.cos(F1))
+  var gamma = (P * Math.cos(F1) + Q * Math.sin(F1)) * (1 - 0.0048 * W)
+  var u = 0.0059
+      + 0.0046 * Math.cos(Msun) * E
+      - 0.0182 * Math.cos(Mmoon)
+      + 0.0004 * Math.cos(2 * Mmoon)
+      - 0.0005 * Math.cos(Msun + Mmoon)
+
+  // Umbral magnitude (Meeus 54.3); <= 0 means penumbral-only here.
+  var mag = (1.0128 - u - Math.abs(gamma)) / 0.545
+  if (mag <= 0) return null
+
+  // Semi-durations of the partial and total phases, in days (p. 382).
+  var pR = 1.0128 - u
+  var tR = 0.4678 - u
+  var n = 0.5458 + 0.04 * Math.cos(Mmoon)
+  var g2 = gamma * gamma
+  var sdPartial = Math.sqrt(pR * pR - g2) / n / 24
+  var sdTotal = mag > 1 ? Math.sqrt(tR * tR - g2) / n / 24 : 0
+
+  return {
+    greatestMs: Math.round((jdeMax - 2440587.5) * MS_PER_DAY),
+    kind: mag > 1 ? "total" : "partial",
+    magnitude: mag,
+    gamma: gamma,
+    semiPartialMs: Math.round(sdPartial * MS_PER_DAY),
+    semiTotalMs: Math.round(sdTotal * MS_PER_DAY)
+  }
+}
+
+// Active umbral eclipse at nowMs, or null. The two nearest full moons
+// bracket any instant, so scanning the current and next lunation suffices.
+// depth: 0..1 visual intensity — ramps across the partial phases, plateaus
+// through totality; peak = min(magnitude, 1) keeps grazing partials light.
+function eclipseState(nowMs) {
+  var target = Number(nowMs)
+  var kk = Math.floor((target - EPOCH_MS) / (SYNODIC_DAYS * MS_PER_DAY))
+  for (var i = 0; i <= 1; i++) {
+    var e = lunarEclipseAt(kk + i + 0.5)
+    if (!e) continue
+    // Full umbral window: partial phases flank greatest on both sides, and
+    // totals add the totality semi-duration beyond each partial phase.
+    var maxMs = e.greatestMs
+    var half = e.semiPartialMs + (e.kind === "total" ? e.semiTotalMs : 0)
+    var u1 = maxMs - half
+    var u4 = maxMs + half
+    if (target < u1 || target > u4) continue
+
+    var peak = Math.min(e.magnitude, 1)
+    var depth
+    if (e.kind === "total") {
+      var u2 = maxMs - e.semiTotalMs
+      var u3 = maxMs + e.semiTotalMs
+      if (target < u2) depth = peak * (target - u1) / (u2 - u1)
+      else if (target <= u3) depth = peak
+      else depth = peak * (u4 - target) / (u4 - u3)
+    } else {
+      if (target < maxMs) depth = peak * (target - u1) / (maxMs - u1)
+      else depth = peak * (u4 - target) / (u4 - maxMs)
+    }
+    return {
+      kind: e.kind,
+      label: e.kind === "total" ? "Total Lunar Eclipse" : "Partial Lunar Eclipse",
+      depth: Math.max(0, Math.min(1, depth)),
+      peak: peak,
+      gamma: e.gamma,
+      greatestMs: maxMs,
+      // 0..1 through the umbral window — drives shadow position so it
+      // transits monotonically across the disk instead of ebbing in place.
+      progress: Math.max(0, Math.min(1, (target - u1) / (u4 - u1))),
+      endsMs: u4
+    }
+  }
+  return null
+}
+
 var PALETTES = {
   blocks: { lit: "\u2588", term: "\u2593", dark: "\u00B7", void: " ", crater: "\u25CB", sea: "\u2592" }, // █ ▓ · ○ ▒
   ascii: { lit: "@", term: "#", dark: ".", void: " ", crater: "O", sea: "~" },
@@ -292,6 +432,38 @@ function _stampFace(grid, rowCount, colCount, palette, wink) {
     put(i, rB, i === cBl ? "\\" : i === cBr ? "/" : "_")
 }
 
+// Stamp Earth's umbral shadow across the disk during an eclipse. Geometry
+// is deliberately simple: a fixed ~2.7-lunar-radius umbra circle (real ratio
+// sigma~0.74 Earth radii vs the Moon's 0.2725) whose center transits
+// monotonically left to right across the whole event (northern-hemisphere
+// view — the Moon moves eastward into the shadow, which is its left limb as
+// we face it), positioned by eclipse.progress rather than depth so it never
+// retreats the way it came. Vertical placement is each event's real
+// gamma normalized to lunar radii (gamma/0.2725; positive passes north of
+// center = above on screen) — which also keeps partials honest: their large
+// offsets mean the umbra edge never swallows the far limb, while totals'
+// near-central paths envelop it. A gentle cosmetic tilt adds high entry,
+// low exit.
+function _stampUmbra(grid, rows, cols, palette, eclipse) {
+  var RU = 2.7
+  var XE = RU + 1.15
+  var ox = -XE + 2 * XE * eclipse.progress
+  var oyMid = -eclipse.gamma / 0.2725
+  var oy = oyMid - 0.6 * (0.5 - eclipse.progress)
+  var band = 0.35
+  for (var j = 0; j < rows; j++) {
+    var y = ((j + 0.5) / rows) * 2 - 1
+    for (var i = 0; i < cols; i++) {
+      if (grid[j][i] === palette.void) continue
+      var dx = ((i + 0.5) / cols) * 2 - 1 - ox
+      var dy = y - oy
+      var d = Math.sqrt(dx * dx + dy * dy)
+      if (d <= RU) grid[j][i] = palette.dark
+      else if (d <= RU + band) grid[j][i] = palette.term
+    }
+  }
+}
+
 // Render the lunar disk at the exact phase fraction as multi-line text art.
 // `aspect` is the physical height:width ratio of one character cell (measure
 // it from the rendering font); columns are derived from it so the disk stays
@@ -299,7 +471,8 @@ function _stampFace(grid, rowCount, colCount, palette, wink) {
 // ("vector" and "cartoon" are canvas-drawn and get blank placeholder grids.)
 // Inputs assumed caller-normalized: Panel.artRows clamps 9–41 (odd),
 // Panel.artCellAspect clamps 1.2–3; tests pass literals.
-function renderMoonArt(fraction, style, rows, mirror, aspect, wink) {
+// `eclipse` (optional, from eclipseState) darkens cells under the umbra.
+function renderMoonArt(fraction, style, rows, mirror, aspect, wink, eclipse) {
   var palette = PALETTES[style] === undefined ? PALETTES.blocks : PALETTES[style]
 
   var colCount = Math.max(rows, Math.round(rows * aspect))
@@ -346,6 +519,7 @@ function renderMoonArt(fraction, style, rows, mirror, aspect, wink) {
 
   _stampSeas(grid, rows, colCount, palette)
   _stampCraters(grid, rows, colCount, palette)
+  if (eclipse && eclipse.depth > 0) _stampUmbra(grid, rows, colCount, palette, eclipse)
 
   var lines = []
   for (var k = 0; k < grid.length; k++) {
@@ -434,6 +608,8 @@ module.exports = {
     EGG_SEA: EGG_SEA,
     seaHit: seaHit,
     vecMouthHit: vecMouthHit,
-    seaCenter: seaCenter
+    seaCenter: seaCenter,
+    lunarEclipseAt: lunarEclipseAt,
+    eclipseState: eclipseState
   }
 }

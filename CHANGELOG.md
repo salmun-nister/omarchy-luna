@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] — 2026-08-25
+
+### Added
+
+- Lunar eclipse support, fully offline (Meeus "Astronomical Algorithms"
+  ch. 54 lunar section). Umbral eclipses show a red label under the phase
+  name in the panel, darken the moon art where Earth's shadow falls, and
+  tint the bar pill toward the theme's alert color as depth grows; the
+  tooltip and right-click notification mention the event too. Penumbral-only
+  events are skipped — they're invisible to the eye anyway.
+- Dev test mode extensions: `E` runs an animated eclipse preview — first a
+  partial event start-to-end, then a total one with its totality plateau,
+  each looping until switched off; `N` previews the southern-hemisphere
+  view across panel art, glyphs, and the bar pill without touching the
+  setting. Any active eclipse preview pins the phase at full moon, since
+  lunar eclipses only happen there.
+- Dev-mode compact status line (bottom-left of the art card) showing the
+  active art style, eclipse kind, and hemisphere. `Q` toggles quiet mode
+  to hide it for screenshots.
+- Preview GIFs in the README usage section.
+
+### Fixed
+
+- Cartoon-style eclipse shadow was square instead of round: the old code
+  used straight hatch strokes clipped to the disk, producing flat edges
+  at line endpoints. Now uses a two-pass solid radial fill (core + rim
+  ring) inside disk ∩ umbra circle, which is circle-native at every
+  angle.
+
+### Verified
+
+- Greatest-eclipse times within ~1 minute and umbral magnitudes within 0.01
+  of NASA's catalog across all 13 umbral events from 2026 to 2035 (test
+  suite fixtures).
+
 ## [0.1.4] — 2026-08-24
 
 ### Changed

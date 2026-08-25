@@ -144,16 +144,27 @@ Panel {
 
   readonly property var phase: Model.moonState(clock.date.getTime(), southUp)
 
-  // What the bar pill shows: emoji, or the monochrome themed glyph when the
-  // plainIcon setting is on. Notifications and tooltip keep the emoji.
-  readonly property string pillGlyph: plainIcon
-      ? Model.plainGlyphFor(phase.fraction, southUp)
-      : phase.glyph
-  readonly property string label: pillGlyph + (showPercent ? " " + phase.illuminationPct + "%" : "")
-  readonly property string tooltipText: phase.phaseName + " · " + phase.illuminationPct + "% illuminated"
-  readonly property string notificationSummary: phase.glyph + " " + phase.phaseName + " — " + phase.illuminationPct + "% illuminated"
+  // Active umbral lunar eclipse, or null. Null outside U1..U4 windows and
+  // for penumbral-only events (Model skips those by design).
+  readonly property var eclipse: Model.eclipseState(clock.date.getTime())
 
-  readonly property string moonArt: Model.renderMoonArt(displayFraction, artStyle, artRows, southUp, artCellAspect, winkNow)
+  // What the bar pill shows: emoji, or the monochrome themed glyph when the
+  // plainIcon setting is on. Notifications keep the real moon's emoji.
+  readonly property string pillGlyph: plainIcon
+      ? Model.plainGlyphFor(displayPhase.fraction, displaySouthUp)
+      : displayPhase.glyph
+  readonly property string label: pillGlyph + (showPercent ? " " + displayPhase.illuminationPct + "%" : "")
+  readonly property string tooltipText: displayPhase.phaseName + " · " + displayPhase.illuminationPct + "% illuminated"
+      + (artEclipse ? " — " + artEclipse.label : "")
+  readonly property string notificationSummary: phase.glyph + " " + phase.phaseName + " — " + phase.illuminationPct + "% illuminated"
+      + (eclipse ? " (" + eclipse.label + ")" : "")
+
+  // Eclipse state driving all visuals: real event XOR dev preview.
+  readonly property var artEclipse: devMode ? devEclipsePreview : eclipse
+  // Pill styling inputs for BarWidget (tint on plain glyph, halo on emoji).
+  readonly property real pillEclipseDepth: artEclipse ? artEclipse.depth : 0
+
+  readonly property string moonArt: Model.renderMoonArt(displayFraction, artStyle, artRows, displaySouthUp, artCellAspect, winkNow, artEclipse)
 
   // Decorative sky around the disk: REGENERATED with new random positions
   // every time the popup opens or the style changes. Rejection sampling
@@ -256,18 +267,82 @@ Panel {
     id: devCycle
     interval: 1000
     repeat: true
-    running: root.devMode && root.opened
+    // Eclipse preview pins the phase at full moon, so nothing to advance.
+    running: root.devMode && root.devEclipseStage === 0 && root.opened
     onTriggered: root.devFraction = (root.devFraction + 0.05) % 1.0
   }
 
   function toggleDev() {
     devMode = !devMode
-    if (devMode) devFraction = phase.fraction
-    // Re-arm the wink heartbeat so the new cadence applies at once.
+    if (devMode) {
+      devFraction = phase.fraction
+      devSouth = southUp
+      devQuiet = false
+    } else {
+      devEclipseStage = 0
+    }
     remainMs = nextWinkMs()
   }
 
-  readonly property real displayFraction: devMode ? devFraction : phase.fraction
+  property bool devSouth: false
+  property bool devQuiet: false
+  readonly property bool displaySouthUp: devMode ? devSouth : southUp
+
+  function toggleDevHemisphere() {
+    if (!devMode) return
+    devSouth = !devSouth
+  }
+
+  function toggleDevQuiet() {
+    if (!devMode) return
+    devQuiet = !devQuiet
+  }
+
+  // Eclipse preview: while dev mode is on, E picks what animates — first
+  // press runs a partial eclipse start-to-end, second a total one, third
+  // switches off. Each sweep loops until changed. Lunar eclipses only happen
+  // at full moon, so any active preview also pins the phase there (see
+  // displayFraction).
+  property int devEclipseStage: 0   // 0 = off · 1 = partial anim · 2 = total anim
+  property real devEclipseT: 0      // 0..1 progress through the event
+
+  Timer {
+    id: devEclipseAnim
+    interval: 100                   // 100 ticks × 0.01 = 10 s per sweep
+    repeat: true
+    running: root.devMode && root.devEclipseStage > 0 && root.opened
+    onTriggered: root.devEclipseT = (root.devEclipseT + 0.01) % 1.0
+  }
+
+  readonly property var devEclipsePreview: {
+    if (devEclipseStage === 0 || !devMode) return null
+    var total = devEclipseStage === 2
+    var t = devEclipseT
+    // Depth profile: partial swells to its peak and back; total ramps into
+    // a totality plateau, then out. Shadow position is time-driven (see
+    // Model._stampUmbra); the two flavors carry realistic gammas so one
+    // passes below the disk and the other slightly above, like real events.
+    var peak = total ? 1.0 : 0.93
+    var d
+    if (!total) d = peak * (t <= 0.5 ? t / 0.5 : (1 - t) / 0.5)
+    else if (t < 0.3) d = t / 0.3
+    else if (t <= 0.7) d = 1.0
+    else d = (1 - t) / 0.3
+    return { kind: total ? "total" : "partial",
+             label: total ? "Total Lunar Eclipse" : "Partial Lunar Eclipse",
+             depth: Math.max(0, Math.min(1, d)), peak: peak,
+             gamma: total ? 0.12 : -0.5,
+             progress: t }
+  }
+
+  function cycleDevEclipse() {
+    if (!devMode) return
+    devEclipseStage = (devEclipseStage + 1) % 3
+    devEclipseT = 0                 // every selection starts at first contact
+  }
+
+  readonly property real displayFraction: devEclipsePreview ? 0.5
+      : devMode ? devFraction : phase.fraction
   // Panel-side phase info follows dev mode; the bar pill keeps the real moon.
   // Vector-style easter egg: tapping the smile sticks the tongue out
   // for a moment before it slides back in.
@@ -286,7 +361,7 @@ Panel {
   }
 
   readonly property var displayPhase: root.devMode
-      ? Model.moonState(clock.date.getTime(), southUp, devFraction)
+      ? Model.moonState(clock.date.getTime(), displaySouthUp, devFraction)
       : root.phase
 
   // ---- Easter egg ----
@@ -357,6 +432,14 @@ Panel {
         contentH: panel.contentHeight,
         egg: root.eggRunning,
         dev: root.devMode,
+        quiet: root.devQuiet,
+        southUp: root.displaySouthUp,
+        eclipse: (function() {
+          var e = root.artEclipse
+          if (!e) return null
+          return { kind: e.kind, depth: Math.round(e.depth * 1000) / 1000,
+                   label: e.label, devPreview: root.devMode }
+        })(),
         plainIcon: root.plainIcon,
         frac: Math.round(root.displayFraction * 1000) / 1000,
         scene: {
@@ -397,6 +480,9 @@ Panel {
       onTextKey: function(t) {
         if (t === "s" || t === "S") root.cycleArtStyle()
         else if (t === "i" || t === "I") root.togglePlainIcon()
+        else if (t === "e" || t === "E") root.cycleDevEclipse()
+        else if (t === "n" || t === "N") root.toggleDevHemisphere()
+        else if (t === "q" || t === "Q") root.toggleDevQuiet()
         else if (t === "?") root.toggleDev()
       }
       onCloseRequested: root.close()
@@ -418,6 +504,17 @@ Panel {
           horizontalAlignment: Text.AlignHCenter
         }
 
+        Text {
+          width: parent.width
+          visible: root.artEclipse !== null
+          text: root.artEclipse ? root.artEclipse.label : ""
+          color: Color.urgent
+          font.family: root.bar ? root.bar.fontFamily : Style.font.family
+          font.pixelSize: Style.font.bodySmall
+          font.bold: true
+          horizontalAlignment: Text.AlignHCenter
+        }
+
         Item {
           id: artContainer
           anchors.horizontalCenter: parent.horizontalCenter
@@ -428,13 +525,21 @@ Panel {
           // inside the card.
           clip: true
 
-          // Dev mode only: name the active style in the bottom-left.
           Text {
             anchors.left: parent.left
             anchors.leftMargin: Style.space(12)
             anchors.bottom: parent.bottom
-            visible: root.devMode
-            text: root.artStyle
+            visible: root.devMode && !root.devQuiet
+            text: {
+              var parts = [root.artStyle]
+              if (root.devEclipseStage > 0) {
+                var k = root.devEclipsePreview && root.devEclipsePreview.kind === "total"
+                        ? "total" : "partial"
+                parts.push("eclipse:" + k)
+              }
+              parts.push(root.displaySouthUp ? "south" : "north")
+              return parts.join(" | ")
+            }
             color: Color.accent
             font.family: root.bar.fontFamily
             font.pixelSize: Style.font.caption
@@ -445,7 +550,12 @@ Panel {
             anchors.centerIn: parent
             text: root.moonArt
             textFormat: Text.PlainText
-            color: root.bar.foreground
+            // During an eclipse the whole disk shifts red with depth.
+            color: {
+              var d = root.artEclipse ? root.artEclipse.depth : 0
+              if (d <= 0) return root.bar.foreground
+              return Qt.tint(root.bar.foreground, Qt.rgba(Color.urgent.r, Color.urgent.g, Color.urgent.b, Math.min(1, d * 0.85)))
+            }
             font.family: "monospace"
             font.pixelSize: Style.font.caption
 
@@ -457,7 +567,7 @@ Panel {
                 var p = moonTap.point.position
                 var fx = p.x / Math.max(1, moonText.implicitWidth)
                 var fy = p.y / Math.max(1, moonText.implicitHeight)
-                if (root.artStyle === "ascii" && Model.seaHit(fx, fy, root.southUp)) root.startEgg()
+                if (root.artStyle === "ascii" && Model.seaHit(fx, fy, root.displaySouthUp)) root.startEgg()
                 else if (root.artStyle === "vector" &&
                          Model.vecMouthHit(p.x, p.y, moonText.implicitWidth, moonText.implicitHeight)) root.stickTongue()
                 else root.cycleArtStyle()
@@ -479,9 +589,10 @@ Panel {
             visible: root.artStyle === "vector" || root.artStyle === "cartoon"
 
             readonly property var _sig: [
-              width, height, root.displayFraction, root.winkNow, root.southUp,
+              width, height, root.displayFraction, root.winkNow, root.displaySouthUp,
               root.artStyle, root.tongueOut,
-              root.bar ? root.bar.foreground.toString() : ""
+              root.bar ? root.bar.foreground.toString() : "",
+              JSON.stringify(root.artEclipse)
             ]
             on_SigChanged: requestPaint()
             onVisibleChanged: if (visible) requestPaint()
@@ -560,6 +671,36 @@ Panel {
                 ctx.fill()
               }
               ctx.restore()
+
+              // Eclipse: wash the whole disk toward blood red with depth,
+              // then darken the umbra core with a soft radial gradient.
+              // Drawn before the face so the character stays readable.
+              if (root.artEclipse && root.artEclipse.depth > 0) {
+                var ecl = root.artEclipse
+                ctx.save()
+                ctx.beginPath()
+                ctx.arc(cx, cy, R, 0, 2 * Math.PI)
+                ctx.clip()
+                ctx.fillStyle = "rgba(186,62,48," + Math.min(1, ecl.depth * 0.72) + ")"
+                ctx.fillRect(0, 0, w, h)
+                // Umbra center: time-driven transit (matches the text art
+                // stamp); flipped for southern hemisphere like everything
+                // else canvas-drawn.
+                var RUv = R * 2.7
+                var XEv = RUv + 1.15 * R
+                var flipV = root.displaySouthUp ? -1 : 1
+                var oxV = flipV * (-XEv + 2 * XEv * ecl.progress)
+                var oyMidV = -ecl.gamma / 0.2725 * R
+                var oyV = oyMidV - 0.6 * R * (0.5 - ecl.progress)
+                var coreA = 0.55 * Math.min(1, ecl.depth)
+                var gv = ctx.createRadialGradient(cx + oxV, cy + oyV, R * 0.1, cx + oxV, cy + oyV, RUv)
+                gv.addColorStop(0, "rgba(52,8,8," + coreA + ")")
+                gv.addColorStop(0.7, "rgba(52,8,8," + coreA * 0.8 + ")")
+                gv.addColorStop(1, "rgba(52,8,8,0)")
+                ctx.fillStyle = gv
+                ctx.fillRect(0, 0, w, h)
+                ctx.restore()
+              }
 
               // Face: dot eyes (right one winks into a closed lid) and a smile.
               ctx.fillStyle = INK
@@ -657,7 +798,6 @@ function paintHose(ctx, w, h) {
                 }
                 ctx.closePath()
               }
-
               // Body: exact card surface so the disc melts into the panel.
               ctx.beginPath()
               ctx.arc(cx, cy, k, 0, 2 * Math.PI)
@@ -680,6 +820,37 @@ function paintHose(ctx, w, h) {
                 ctx.stroke()
               }
               ctx.restore()
+
+              // Eclipse: solid umbrella shadow clipped to disk ∩ umbra
+              // circle — same radial geometry as the text-art stamp. Uses
+              // inkA() so the result is monochrome (ink palette colors only,
+              // no new hue), with a lighter rim ring for the soft edge.
+              if (root.artEclipse && root.artEclipse.depth > 0) {
+                var ecl = root.artEclipse
+                var RUh = k * 2.7
+                var XEh = RUh + 1.15 * k
+                var flipH = root.displaySouthUp ? -1 : 1
+                var oxH = flipH * (-XEh + 2 * XEh * ecl.progress)
+                var oyMidH = -ecl.gamma / 0.2725 * k
+                var oyH = oyMidH - 0.6 * k * (0.5 - ecl.progress)
+                var ucx = cx + oxH
+                var ucy = cy + oyH
+                // Clip: disk ∩ umbra circle — the two-circle intersection
+                // that makes a natural arc at every angle.
+                ctx.save()
+                ctx.beginPath()
+                ctx.arc(cx, cy, k * 0.97, 0, 2 * Math.PI)
+                ctx.clip()
+                ctx.beginPath()
+                ctx.arc(ucx, ucy, RUh + 0.35 * k, 0, 2 * Math.PI)
+                ctx.fillStyle = inkA(Math.min(0.35, 0.12 + 0.23 * ecl.depth))
+                ctx.fill()
+                ctx.beginPath()
+                ctx.arc(ucx, ucy, RUh, 0, 2 * Math.PI)
+                ctx.fillStyle = inkA(Math.min(0.65, 0.22 + 0.45 * ecl.depth))
+                ctx.fill()
+                ctx.restore()
+              }
 
               // Craters: thin outlined ellipses (reference layout), shown
               // on the lit surface only.
@@ -927,7 +1098,7 @@ function paintHose(ctx, w, h) {
           readonly property real eggManX: {
             var c = Model.seaCenter(Model.EGG_SEA)
             if (!c) return 0
-            var nx = root.southUp ? -c.x : c.x
+            var nx = root.displaySouthUp ? -c.x : c.x
             return moonText.x + ((nx + 1) / 2) * moonText.implicitWidth
           }
           readonly property real eggManY: {
@@ -1213,19 +1384,6 @@ function paintHose(ctx, w, h) {
             anchors.centerIn: parent
             text: "[S] Style · [I] Icon"
             color: Qt.darker(root.bar.foreground, 1.5)
-            font.family: root.bar.fontFamily
-            font.pixelSize: Style.font.bodySmall
-          }
-
-          // Dev badge appears only while dev mode is active.
-          Text {
-            anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
-            visible: root.devMode
-            text: "Dev"
-            color: Color.accent
-            font.underline: true
-            font.bold: true
             font.family: root.bar.fontFamily
             font.pixelSize: Style.font.bodySmall
           }
