@@ -5,7 +5,7 @@
   "version": "0.2.0",
   "author": "salmun-nister",
   "license": "MIT",
-  "description": "Lunar companion for the Omarchy bar: a live moon phase pill with a stylized popup showing illumination, moon age, and next full/new moon dates.",
+  "description": "Lunar companion for the Omarchy bar: a live moon phase pill with a stylized popup showing illumination, moon age, and next full/new moon dates. Now includes shadow rendering animations during lunar eclipses!",
   "kinds": [
     "bar-widget"
   ],
