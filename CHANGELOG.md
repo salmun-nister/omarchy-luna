@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] — 2026-09-08
+
+### Fixed
+
+- Panel could not be closed after Omarchy 4.0.3 changed the object
+  third-party widgets receive as `bar`: the new `PluginBarApi` facade
+  exposes `centerHoverRevealSuppressed` as read-only, so the old
+  direct assignment threw a `TypeError` inside `close()` before the
+  panel controller could hide — the popup opened but stayed stuck until
+  a shell restart. The call now goes through the shared
+  `setCenterHoverRevealSuppressed()` method first, with the writable
+  assignment as a fallback (same pattern as the updated reference
+  clock/weather panels).
+
 ## [0.2.0] — 2026-08-25
 
 ### Added
