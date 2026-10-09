@@ -4,6 +4,7 @@ import Quickshell
 // FileView went away, even though that was this import's other consumer.
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "Model.js" as Model
 
@@ -510,7 +511,7 @@ Panel {
           width: parent.width
           visible: root.artEclipse !== null
           text: root.artEclipse ? root.artEclipse.label : ""
-          color: Color.urgent
+          color: Commons.Color.urgent
           font.family: root.bar ? root.bar.fontFamily : Style.font.family
           font.pixelSize: Style.font.bodySmall
           font.bold: true
@@ -542,7 +543,7 @@ Panel {
               parts.push(root.displaySouthUp ? "south" : "north")
               return parts.join(" | ")
             }
-            color: Color.accent
+            color: Commons.Color.accent
             font.family: root.bar.fontFamily
             font.pixelSize: Style.font.caption
           }
@@ -556,7 +557,7 @@ Panel {
             color: {
               var d = root.artEclipse ? root.artEclipse.depth : 0
               if (d <= 0) return root.bar.foreground
-              return Qt.tint(root.bar.foreground, Qt.rgba(Color.urgent.r, Color.urgent.g, Color.urgent.b, Math.min(1, d * 0.85)))
+              return Qt.tint(root.bar.foreground, Qt.rgba(Commons.Color.urgent.r, Commons.Color.urgent.g, Commons.Color.urgent.b, Math.min(1, d * 0.85)))
             }
             font.family: "monospace"
             font.pixelSize: Style.font.caption
@@ -771,8 +772,8 @@ function paintHose(ctx, w, h) {
               // Theme mapping: the reference's off-white body is the popup
               // surface, its near-black ink is the bar foreground, and the
               // tongue is a foreground/background mix. No literals.
-              var fg = root.bar ? root.bar.foreground : Color.foreground
-              var bg = Color.popups ? Color.popups.background : Color.background
+              var fg = root.bar ? root.bar.foreground : Commons.Color.foreground
+              var bg = Commons.Color.popups ? Commons.Color.popups.background : Commons.Color.background
               function inkA(a) { return Qt.rgba(fg.r, fg.g, fg.b, a) }
 
               // Geometry helpers in SVG-normalized coordinates.
@@ -979,7 +980,7 @@ function paintHose(ctx, w, h) {
               // Wide-open smile: deep dark cavity, a light crescent of
               // upper teeth tucked under the lip, semi-dark tongue nested
               // at the bottom.
-              var DEEP = Qt.rgba(Color.background.r, Color.background.g, Color.background.b, 1)
+              var DEEP = Qt.rgba(Commons.Color.background.r, Commons.Color.background.g, Commons.Color.background.b, 1)
               var TONGUE = Qt.rgba(
                 fg.r * 0.30 + DEEP.r * 0.70,
                 fg.g * 0.30 + DEEP.g * 0.70,
@@ -1118,7 +1119,7 @@ function paintHose(ctx, w, h) {
             text: "\\o/"
             textFormat: Text.PlainText
             // Same dim role oma.quake gives its small-magnitude events.
-            color: Color.muted
+            color: Commons.Color.muted
             style: Text.Outline
             styleColor: "#b3000000"
             font.family: "monospace"
@@ -1140,7 +1141,7 @@ function paintHose(ctx, w, h) {
             onPaint: {
               var ctx = getContext("2d")
               ctx.reset()
-              ctx.strokeStyle = Color.accent
+              ctx.strokeStyle = Commons.Color.accent
               ctx.lineWidth = Math.max(2, Style.space(3))
               ctx.lineCap = "round"
               ctx.beginPath()
@@ -1158,7 +1159,7 @@ function paintHose(ctx, w, h) {
             // Classic line-art saucer; dark outline keeps it legible.
             text: "  ___  \n<( o )>"
             textFormat: Text.PlainText
-            color: Color.urgent
+            color: Commons.Color.urgent
             style: Text.Outline
             styleColor: "#b3000000"
             font.family: "monospace"

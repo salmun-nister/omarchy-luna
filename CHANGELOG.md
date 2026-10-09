@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] — 2026-10-09
+
+### Fixed
+
+- Panel colours could fall back to black on Qt 6.12: Qt 6.12 adds its own
+  `Color` singleton to QtQuick, which shadows the unqualified name the theme
+  palette was read through. The palette is now read as `Commons.Color`.
+
 ## [0.2.1] — 2026-09-08
 
 ### Fixed
