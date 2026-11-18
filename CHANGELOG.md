@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] — 2026-11-18
+
+### Added
+
+- New `clay` art style: the moon rendered in a hand-worked clay look, drawn
+  from eight painted plates instead of computed from the phase. Each plate
+  carries its own lighting — terminator, crater relief and shadow falloff are
+  rendered into the image rather than drawn by the plugin — and the style
+  ships its plates and baked starfield in `art/` (the sky split into
+  individual star images), so it is fully offline like the others.
+- `clayBlend` setting (default `true`): crossfades the two plates either side
+  of the current phase, so an intermediate phase is a genuine mix of its
+  neighbours rather than a jump. Set it to `false` for hard cuts at the
+  midpoint between plates.
+- Eclipses in the clay style: the same umbra drifts across the painted disc,
+  clipped to its painted circle, with a feathered shadow edge and a coppery
+  rim at totality.
+
+### Changed
+
+- Umbra placement now lives in one place, `Model.umbraFrame()`: the umbra
+  centre and radius are computed once and shared by the text art, both
+  canvases and the clay shadow. `status` reports the frame, so a live eclipse
+  can be checked from the CLI.
+- The clay sky is its own layer of individual star images, so it does not
+  shift between plates when the phase crossfades.
+- `artRows` now sizes only the text-art styles; the clay style uses the
+  default 19-row layout, so its 512px plates are never upscaled.
+- The clay artwork in `art/` ships under the repository's MIT license, like
+  the rest of the plugin.
+
+### Verified
+
+- Phase bucketing and the blend handover are covered by the test suite. The
+  clay style and its eclipse overlay were exercised in a live shell in dev
+  mode, with `omarchy plugin validate` and a `status` probe, and no Luna
+  errors in `qs log`.
+
 ## [0.2.2] — 2026-10-09
 
 ### Fixed

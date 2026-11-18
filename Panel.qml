@@ -7,6 +7,7 @@ import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
 import "Model.js" as Model
+import "art/stars.js" as Stars
 
 Panel {
   id: root
@@ -79,7 +80,7 @@ Panel {
   // layout entry; fail-safe default is blocks.
   readonly property string artStyle: {
     var s = String(setting("artStyle", "blocks")).toLowerCase()
-    return (s === "ascii" || s === "vector" || s === "cartoon") ? s : "blocks"
+    return (s === "ascii" || s === "vector" || s === "cartoon" || s === "clay") ? s : "blocks"
   }
 
   readonly property int artRows: {
@@ -87,6 +88,35 @@ Panel {
     if (isNaN(n)) n = 19
     n = Math.max(9, Math.min(41, n))
     return n % 2 === 0 ? n + 1 : n
+  }
+
+  // Clay plates crossfade between the two states either side of the current
+  // phase. Off gives hard cuts at the midpoint between plates.
+  readonly property bool clayBlend: _bool(setting("clayBlend", true), true)
+
+  // The plates are 512px squares whose painted disc is ~81% of the width
+  // (a transparent margin surrounds it). Scaling by 1/that puts the clay moon
+  // at the same diameter the computed styles draw.
+  readonly property real clayDiscFrac: 0.810
+
+  // artRows shapes the text-art grid; the clay plates have a fixed image
+  // size. Keeping clay at the default 19 rows means the 512px plates are
+  // never upscaled.
+  readonly property int layoutRows: artStyle === "clay" ? 19 : artRows
+
+  readonly property var clayMix: Model.clayPlateMix(displayFraction, clayBlend)
+
+  // The base plate stays opaque; only the incoming plate fades in. Stacking
+  // two semi-transparent layers would let the panel background show through
+  // and bias the blend toward the top plate.
+  function clayPlateOpacity(i) {
+    if (root.artStyle !== "clay") return 0
+    if (i === clayMix.base) return 1
+    return i === clayMix.top ? clayMix.k : 0
+  }
+
+  function clayPlateZ(i) {
+    return i === clayMix.top ? 1 : 0
   }
 
   // Hemisphere is explicit-only: "south" mirrors the art and glyphs, any
@@ -97,7 +127,7 @@ Panel {
   }
 
   function cycleArtStyle() {
-    var order = ["blocks", "ascii", "vector", "cartoon"]
+    var order = ["blocks", "ascii", "vector", "cartoon", "clay"]
     persistSettings({ artStyle: order[(order.indexOf(artStyle) + 1) % order.length] })
   }
 
@@ -167,7 +197,7 @@ Panel {
   // Pill styling inputs for BarWidget (tint on plain glyph, halo on emoji).
   readonly property real pillEclipseDepth: artEclipse ? artEclipse.depth : 0
 
-  readonly property string moonArt: Model.renderMoonArt(displayFraction, artStyle, artRows, displaySouthUp, artCellAspect, winkNow, artEclipse)
+  readonly property string moonArt: Model.renderMoonArt(displayFraction, artStyle, layoutRows, displaySouthUp, artCellAspect, winkNow, artEclipse)
 
   // Decorative sky around the disk: REGENERATED with new random positions
   // every time the popup opens or the style changes. Rejection sampling
@@ -427,8 +457,9 @@ Panel {
     function status() {
       var s = JSON.stringify({
         style: root.artStyle,
-        rows: root.artRows,
-        columns: Math.max(root.artRows, Math.round(root.artRows * root.artCellAspect)),
+        rows: root.layoutRows,
+        columns: Math.max(root.layoutRows, Math.round(root.layoutRows * root.artCellAspect)),
+        artRows: root.artRows,
         cellAspect: Math.round(root.artCellAspect * 1000) / 1000,
         artPx: [Math.round(moonText.implicitWidth), Math.round(moonText.implicitHeight)],
         contentW: panel.contentWidth,
@@ -440,8 +471,15 @@ Panel {
         eclipse: (function() {
           var e = root.artEclipse
           if (!e) return null
+          var f = Model.umbraFrame(e)
           return { kind: e.kind, depth: Math.round(e.depth * 1000) / 1000,
-                   label: e.label, devPreview: root.devMode }
+                   label: e.label, devPreview: root.devMode,
+                   progress: Math.round(e.progress * 1000) / 1000,
+                   // Umbra centre and radius in disc radii (south view
+                   // mirrors the x axis on screen, as the renderers do).
+                   shadow: [Math.round(f.ox * 1000) / 1000,
+                            Math.round(f.oy * 1000) / 1000,
+                            Math.round(f.r * 1000) / 1000] }
         })(),
         plainIcon: root.plainIcon,
         frac: Math.round(root.displayFraction * 1000) / 1000,
@@ -528,6 +566,37 @@ Panel {
           // inside the card.
           clip: true
 
+          // One tap target for every style. The clay stack is larger than the
+          // text layer and the two overlap, so a handler on each would both
+          // fire on a single click and advance two styles at once. The
+          // container owns the tap instead; each style's own bounds decide
+          // whether the click counts, and where it landed.
+          TapHandler {
+            id: artTap
+            onTapped: function() {
+              var p = artTap.point.position
+              if (root.artStyle === "clay") {
+                // The plates take no input of their own, so the whole stack
+                // (moon plus its stars) is the target.
+                if (clayStack.contains(clayStack.mapFromItem(artContainer, p.x, p.y)))
+                  root.cycleArtStyle()
+                return
+              }
+              var q = moonText.mapFromItem(artContainer, p.x, p.y)
+              if (q.x < 0 || q.y < 0 ||
+                  q.x > moonText.implicitWidth || q.y > moonText.implicitHeight)
+                return
+              // Unless the tap lands in Mare Tranquillitatis, which belongs
+              // to the easter egg.
+              var fx = q.x / Math.max(1, moonText.implicitWidth)
+              var fy = q.y / Math.max(1, moonText.implicitHeight)
+              if (root.artStyle === "ascii" && Model.seaHit(fx, fy, root.displaySouthUp)) root.startEgg()
+              else if (root.artStyle === "vector" &&
+                       Model.vecMouthHit(q.x, q.y, moonText.implicitWidth, moonText.implicitHeight)) root.stickTongue()
+              else root.cycleArtStyle()
+            }
+          }
+
           Text {
             anchors.left: parent.left
             anchors.leftMargin: Style.space(12)
@@ -562,20 +631,8 @@ Panel {
             font.family: "monospace"
             font.pixelSize: Style.font.caption
 
-            // Style cycle on tap — unless the tap lands in Mare
-            // Tranquillitatis, which belongs to the easter egg.
-            TapHandler {
-              id: moonTap
-              onTapped: function() {
-                var p = moonTap.point.position
-                var fx = p.x / Math.max(1, moonText.implicitWidth)
-                var fy = p.y / Math.max(1, moonText.implicitHeight)
-                if (root.artStyle === "ascii" && Model.seaHit(fx, fy, root.displaySouthUp)) root.startEgg()
-                else if (root.artStyle === "vector" &&
-                         Model.vecMouthHit(p.x, p.y, moonText.implicitWidth, moonText.implicitHeight)) root.stickTongue()
-                else root.cycleArtStyle()
-              }
-            }
+            // Tap handling lives on artContainer: the clay stack overlaps
+            // this layer, and a handler here would fire as well.
             HoverHandler {
               cursorShape: Qt.PointingHandCursor
             }
@@ -686,15 +743,14 @@ Panel {
                 ctx.clip()
                 ctx.fillStyle = "rgba(186,62,48," + Math.min(1, ecl.depth * 0.72) + ")"
                 ctx.fillRect(0, 0, w, h)
-                // Umbra center: time-driven transit (matches the text art
-                // stamp); flipped for southern hemisphere like everything
-                // else canvas-drawn.
-                var RUv = R * 2.7
-                var XEv = RUv + 1.15 * R
+                // Umbra center: time-driven transit (shared with the text
+                // art and clay); flipped for southern hemisphere like
+                // everything else canvas-drawn.
+                var ufV = Model.umbraFrame(ecl)
+                var RUv = ufV.r * R
                 var flipV = root.displaySouthUp ? -1 : 1
-                var oxV = flipV * (-XEv + 2 * XEv * ecl.progress)
-                var oyMidV = -ecl.gamma / 0.2725 * R
-                var oyV = oyMidV - 0.6 * R * (0.5 - ecl.progress)
+                var oxV = flipV * ufV.ox * R
+                var oyV = ufV.oy * R
                 var coreA = 0.55 * Math.min(1, ecl.depth)
                 var gv = ctx.createRadialGradient(cx + oxV, cy + oyV, R * 0.1, cx + oxV, cy + oyV, RUv)
                 gv.addColorStop(0, "rgba(52,8,8," + coreA + ")")
@@ -830,12 +886,11 @@ function paintHose(ctx, w, h) {
               // no new hue), with a lighter rim ring for the soft edge.
               if (root.artEclipse && root.artEclipse.depth > 0) {
                 var ecl = root.artEclipse
-                var RUh = k * 2.7
-                var XEh = RUh + 1.15 * k
+                var ufH = Model.umbraFrame(ecl)
+                var RUh = ufH.r * k
                 var flipH = root.displaySouthUp ? -1 : 1
-                var oxH = flipH * (-XEh + 2 * XEh * ecl.progress)
-                var oyMidH = -ecl.gamma / 0.2725 * k
-                var oyH = oyMidH - 0.6 * k * (0.5 - ecl.progress)
+                var oxH = flipH * ufH.ox * k
+                var oyH = ufH.oy * k
                 var ucx = cx + oxH
                 var ucy = cy + oyH
                 // Clip: disk ∩ umbra circle — the two-circle intersection
@@ -1062,6 +1117,206 @@ function paintHose(ctx, w, h) {
             }
           }
 
+          // ---- Clay plates ----
+          // Eight painted states instead of a computed disc. The plates are
+          // pre-masked to a transparent circle, so the panel's own background
+          // and star field show around the moon. All eight stay loaded; the
+          // phase only moves opacity, which is also the crossfade.
+          Item {
+            id: clayStack
+            visible: root.artStyle === "clay"
+            // Square plate scaled so the painted disc lands at the same
+            // diameter the other styles use (their radius is 0.97 of the
+            // smaller side).
+            width: moonText.height * 0.97 / root.clayDiscFrac
+            height: width
+            anchors.centerIn: moonText
+
+            // Clay stars: the baked sky cut into one image per star, so each
+            // keeps its real pixels and twinkles on its own cycle. Positions
+            // come from the build (art/stars.js). The whole layer mirrors as
+            // one piece for the southern view.
+            Item {
+              id: clayStars
+              // Pulled in a little: the sky in the artwork runs to the frame
+              // edge, which is wider than the panel card.
+              readonly property real inset: 0.93
+              anchors.fill: parent
+              transform: [
+                Scale {
+                  origin.x: clayStars.width / 2
+                  origin.y: clayStars.height / 2
+                  xScale: clayStars.inset
+                  yScale: clayStars.inset
+                },
+                Scale {
+                  origin.x: clayStars.width / 2
+                  origin.y: clayStars.height / 2
+                  xScale: root.displaySouthUp ? -1 : 1
+                }
+              ]
+
+              Repeater {
+                model: Stars.STARS
+
+                Image {
+                  required property var modelData
+                  required property int index
+
+                  source: Qt.resolvedUrl("art/star-" + index + ".webp")
+                  width: parent.width * Stars.CROP
+                  height: width
+                  x: modelData.fx * parent.width - width / 2
+                  y: modelData.fy * parent.height - height / 2
+                  fillMode: Image.PreserveAspectFit
+                  smooth: true
+                  asynchronous: true
+                  opacity: 0.4
+
+                  SequentialAnimation on opacity {
+                    running: root.opened && root.artStyle === "clay"
+                    loops: Animation.Infinite
+                    NumberAnimation {
+                      from: 1; to: 0.4
+                      duration: 2300 + index * 420
+                      easing.type: Easing.InOutQuad
+                    }
+                    NumberAnimation {
+                      from: 0.4; to: 1
+                      duration: 2300 + index * 420
+                      easing.type: Easing.InOutQuad
+                    }
+                  }
+                }
+              }
+            }
+
+            Repeater {
+              model: 8
+
+              Image {
+                required property int index
+                anchors.fill: parent
+                source: Qt.resolvedUrl("art/clay-" + index + ".webp")
+                fillMode: Image.PreserveAspectFit
+                smooth: true
+                mirror: root.displaySouthUp
+                asynchronous: true
+                z: root.clayPlateZ(index)
+                opacity: root.clayPlateOpacity(index)
+              }
+            }
+
+            // Taps are handled by artContainer: a handler here would fire
+            // alongside the one on the text layer and skip a style.
+            HoverHandler { cursorShape: Qt.PointingHandCursor }
+          }
+
+          // Clay eclipse: the plates are photographs of a sculpted moon, so
+          // the shadow is painted on top instead of recomputed. Everything
+          // is clipped to the painted circle, and the fills stay translucent
+          // so the sculpture reads through them. No new colors: the theme's
+          // alert color, darkened toward the umbra core.
+          Canvas {
+            id: clayShadow
+            anchors.centerIn: clayStack
+            width: clayStack.width
+            height: width
+            visible: root.artStyle === "clay" && root.artEclipse !== null
+
+            readonly property var _sig: [
+              width, root.displaySouthUp,
+              JSON.stringify(root.artEclipse),
+              Commons.Color.urgent.toString()
+            ]
+            on_SigChanged: requestPaint()
+            onVisibleChanged: if (visible) requestPaint()
+            Component.onCompleted: requestPaint()
+
+            onPaint: {
+              var ctx = getContext("2d")
+              ctx.reset()
+              if (!root.artEclipse || root.artEclipse.depth <= 0) return
+              paintClayShadow(ctx, width, height)
+            }
+
+            // Transit and depth share Model.umbraFrame with the other
+            // styles. The umbra circle is 2.7 disc radii wide, so its edge
+            // across the disc is the arc a partial eclipse shows; a total
+            // one swallows the disc whole and stays coppery.
+            function paintClayShadow(ctx, w, h) {
+              if (w < 10 || h < 10) return
+              var ecl = root.artEclipse
+              var depth = Math.max(0, Math.min(1, ecl.depth))
+              var cx = w / 2
+              var cy = h * 0.495           // ball centre in the plate frame
+              var R = w * root.clayDiscFrac / 2
+              var frame = Model.umbraFrame(ecl)
+              var flip = root.displaySouthUp ? -1 : 1
+              var ux = cx + flip * frame.ox * R
+              var uy = cy + frame.oy * R
+              var ur = frame.r * R
+
+              var alert = Commons.Color.urgent
+              var core = Qt.darker(alert, 2.2)
+              // Canvas fillStyle wants a string, not a color object.
+              function rgba(c, a) {
+                return "rgba(" + Math.round(c.r * 255) + "," + Math.round(c.g * 255)
+                    + "," + Math.round(c.b * 255) + "," + a + ")"
+              }
+
+              ctx.save()
+              ctx.beginPath()
+              ctx.arc(cx, cy, R, 0, 2 * Math.PI)
+              ctx.clip()
+
+              // Umbra body. The plates are soft-focus sculptures, so the
+              // shadow edge is feathered instead of a vector circle: flat far
+              // inside, a long falloff across the geometric edge (65% of the
+              // core alpha at `ur`) and a faint skirt beyond it. The skirt is
+              // the nearest thing to a penumbra we can show — penumbral-only
+              // events are skipped entirely.
+              var coreA = Math.min(0.84, 0.12 + 0.72 * Math.pow(depth, 1.25))
+              var g0 = ur - 0.30 * R
+              var g1 = ur + 1.00 * R
+              function at(r) { return (r - g0) / (g1 - g0) }
+              var gb = ctx.createRadialGradient(ux, uy, g0, ux, uy, g1)
+              gb.addColorStop(0, rgba(core, coreA))
+              gb.addColorStop(at(ur - 0.10 * R), rgba(core, coreA * 0.93))
+              gb.addColorStop(at(ur), rgba(core, coreA * 0.65))
+              gb.addColorStop(at(ur + 0.25 * R), rgba(core, coreA * 0.28))
+              gb.addColorStop(at(ur + 0.60 * R), rgba(core, coreA * 0.08))
+              gb.addColorStop(1, rgba(core, 0))
+              ctx.fillStyle = gb
+              ctx.beginPath()
+              ctx.arc(ux, uy, g1, 0, 2 * Math.PI)
+              ctx.fill()
+
+              // Deeper toward the shadow axis, which only shows once the
+              // umbra covers a good part of the disc.
+              var gd = ctx.createRadialGradient(ux, uy, 0, ux, uy, ur * 0.8)
+              gd.addColorStop(0, rgba(Qt.darker(core, 1.5), coreA * 0.35))
+              gd.addColorStop(1, rgba(core, 0))
+              ctx.fillStyle = gd
+              ctx.beginPath()
+              ctx.arc(ux, uy, ur * 0.8, 0, 2 * Math.PI)
+              ctx.fill()
+
+              // Totality keeps a warm rim: refracted sunlight pools at the
+              // limb, and it stops the disc dissolving into the card.
+              if (ecl.kind === "total" && depth > 0.6) {
+                var rimK = (depth - 0.6) / 0.4
+                var gr = ctx.createRadialGradient(cx, cy, R * 0.6, cx, cy, R)
+                gr.addColorStop(0, rgba(alert, 0))
+                gr.addColorStop(0.85, rgba(alert, 0.16 * rimK))
+                gr.addColorStop(1, rgba(alert, 0.42 * rimK))
+                ctx.fillStyle = gr
+                ctx.fillRect(0, 0, w, h)
+              }
+              ctx.restore()
+            }
+          }
+
           Repeater {
             model: root.starField
 
@@ -1069,6 +1324,9 @@ function paintHose(ctx, w, h) {
               required property var modelData
               required property int index
 
+              // The clay style uses its own sculpted star layer; the plate
+              // stars are masked out.
+              visible: root.artStyle !== "clay"
               x: modelData.fx * parent.width - implicitWidth / 2
               y: modelData.fy * parent.height - implicitHeight / 2
               text: modelData.glyph

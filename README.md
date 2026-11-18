@@ -1,7 +1,7 @@
 # Luna
 
 A moon phase plugin for the Omarchy Quattro bar. Shows the current lunar
-phase as a pill in the bar and renders it as stylized text art in a popup —
+phase as a pill in the bar and renders it as stylized text or art in a popup —
 fully offline, with no network calls.
 
 ![Luna popup showing a stylized moon](preview.png)
@@ -33,15 +33,23 @@ inspired by the real near side: craters (Tycho, Copernicus, Kepler,
 Aristarchus, Plato, Gassendi, Langrenus, Grimaldi) and dark maria (Imbrium,
 Serenitatis, Tranquillitatis, Fecunditatis, Crisium, Nubium, Humorum and
 Oceanus Procellarum); each appears only when its position is illuminated.
-Stars twinkle around it, reshuffled every time the popup opens or the
-style changes.
+Stars twinkle around it.
 
 ![Phase cycling through the lunar month](preview_phases.gif)
+
+The `clay` style draws the moon from eight plates, one per eighth of the
+cycle, each rendered to look like a hand-worked clay sphere and lit for its
+own phase. Neighbouring plates crossfade as the moon advances:
+
+![Clay style: clay-look moon at waxing gibbous](preview_clay.png)
 
 During a (umbral) lunar eclipse the panel shows a red "Partial/Total Lunar
 Eclipse" line under the phase name, the moon art darkens under Earth's
 shadow, and the bar pill shifts toward your theme's alert color with eclipse
-depth.
+depth. Every art style draws the same shadow: it enters at one limb, crosses
+the disc as the event progresses, and goes coppery once totality swallows the
+moon. The `clay` plates have no computed terminator, so the shadow is painted
+over the clay surface and clipped to its circle.
 
 ![Eclipse preview](preview_eclipse.gif)
 
@@ -53,22 +61,37 @@ Settings are flat keys on the widget's entry in the `bar.layout` section of
 ```jsonc
 {
   "id": "salmun-nister.luna",
-  "artStyle": "blocks",   // "blocks" | "ascii" | "vector" | "cartoon";
-                          // cycling rewrites this entry, so omitting it
-                          // resumes the last-used style
-  "artRows": 19,          // 9–41 (odd enforced); columns derive from the
-                          // font's cell aspect so the moon stays circular
+  "artStyle": "blocks",   // "blocks" | "ascii" | "vector" | "cartoon" |
+                          // "clay"; cycling rewrites this entry, and
+                          // omitting it falls back to "blocks"
+  "artRows": 19,          // 9–41 (odd enforced); text-art styles only;
+                          // columns derive from the font's cell aspect so
+                          // the moon stays circular
   "hemisphere": "north",  // "north" | "south" — defaults to north; set
                           // "south" if you're below the equator (mirrors
                           // the art/glyphs)
   "showPercent": false,   // append illumination % to the bar pill
-  "plainIcon": true       // pill icon: plain monochrome Nerd Font glyph
+  "plainIcon": true,      // pill icon: plain monochrome Nerd Font glyph
                           // (theme text color) instead of color emoji
+  "clayBlend": true       // "clay" style only: crossfade between the two
+                          // nearest plates instead of hard cuts
 }
 ```
 
-The moon art inherits your theme's foreground color automatically; nothing is
-hardcoded.
+Each `artStyle` value renders the same phase differently:
+
+- `blocks` — dot-matrix moon in `█ ▓ ·` glyphs (the default)
+- `ascii` — the same shading in `@ # .` characters
+- `vector` — a friendly cartoon moon drawn on a canvas
+- `cartoon` — a 1930s rubber-hose moon drawn in theme colors
+- `clay` — the moon as eight painted clay plates, one per eighth of the
+  cycle, crossfaded as it advances; it ignores `artRows` and stays on the
+  default 19-row layout, and `clayBlend: false` cuts between plates
+  instead of blending
+
+The text-art styles inherit your theme's foreground color automatically; the
+canvas and clay styles use their own fixed palettes. The clay style was also
+checked on a light theme.
 
 ## Accuracy
 

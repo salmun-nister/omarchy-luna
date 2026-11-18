@@ -197,17 +197,65 @@ check('south render = mirrored north', (() => {
   return stripFeatures(n) === stripFeatures(s)
 })())
 
-// --- Canvas style placeholder grids (vector + cartoon) ---
+// --- Canvas/image style placeholder grids (vector, cartoon, clay) ---
 {
   const b = M.renderMoonArt(0.5, 'blocks', 19, false, 2.333)
   const bl = b.split('\n')
-  for (const style of ['vector', 'cartoon']) {
+  for (const style of ['vector', 'cartoon', 'clay']) {
     const g = M.renderMoonArt(0.5, style, 19, false, 2.333)
     check(`${style} render is whitespace-only`, g.trim().length === 0)
     const gl = g.split('\n')
     check(`${style} dims match blocks dims`, gl.length === bl.length && gl[0].length === bl[0].length)
   }
 }
+// --- Clay plates: eight states, same bucketing as the glyphs ---
+{
+  // Every plate is centred on its own eighth of the cycle.
+  for (let i = 0; i < 8; i++) {
+    check(`plateIndex(${i}/8) === ${i}`, M.plateIndex(i / 8) === i)
+  }
+  // Wraps past 1 and handles the negative side.
+  check('plateIndex wraps > 1', M.plateIndex(1.0) === 0)
+  check('plateIndex wraps negative', M.plateIndex(-0.01) === 0)
+  check('plateIndex mid-slot rounds to nearest', M.plateIndex(0.0625) === 1)
+
+  // Blend partner is always the next plate, and k closes the loop cleanly.
+  const b0 = M.plateBlend(0.25)
+  check('blend at a plate centre is pure', b0.a === 2 && b0.b === 3 && Math.abs(b0.k) < 1e-9)
+  const b1 = M.plateBlend(0.9375)
+  check('blend wraps 7 -> 0', b1.a === 7 && b1.b === 0 && Math.abs(b1.k - 0.5) < 1e-9)
+  const b2 = M.plateBlend(0.5)
+  check('blend at full moon is 4 -> 5', b2.a === 4 && b2.b === 5 && Math.abs(b2.k) < 1e-9)
+
+  // k is continuous across the handover: 0.99 of a slot then 0 of the next.
+  const nearEnd = M.plateBlend(0.25 + 0.125 * 0.99)
+  const nextStart = M.plateBlend(0.25 + 0.125)
+  check('blend k resets at the handover',
+        nearEnd.a === 2 && nearEnd.b === 3 && nearEnd.k > 0.98 &&
+        nextStart.a === 3 && Math.abs(nextStart.k) < 1e-9)
+
+  // Render mix: the base plate stays opaque and the next one fades in over
+  // it, so the pair is ordered and the weights are a true (1-k)/k blend.
+  const m0 = M.clayPlateMix(0.25, true)
+  check('mix at a plate centre is pure', m0.base === 2 && m0.top === 3 && Math.abs(m0.k) < 1e-9)
+  const m1 = M.clayPlateMix(0.9375, true)
+  check('mix wraps 7 -> 0', m1.base === 7 && m1.top === 0 && Math.abs(m1.k - 0.5) < 1e-9)
+  const m2 = M.clayPlateMix(0.99, true)
+  check('mix near new moon mostly shows plate 0',
+        m2.base === 7 && m2.top === 0 && m2.k > 0.9)
+
+  // No blending: hard cut at the midpoint, exactly as documented.
+  const noBlendBefore = M.clayPlateMix(0.9374, false)
+  const noBlendAt = M.clayPlateMix(0.9375, false)
+  check('no-blend keeps the previous plate before the midpoint',
+        noBlendBefore.base === 7 && noBlendBefore.top === -1 && noBlendBefore.k === 0)
+  check('no-blend cuts to the next plate at the midpoint',
+        noBlendAt.base === 0 && noBlendAt.top === -1 && noBlendAt.k === 0)
+  const noBlendLate = M.clayPlateMix(0.99, false)
+  check('no-blend no longer lags a whole slot near new moon',
+        noBlendLate.base === 0 && noBlendLate.top === -1)
+}
+
 // --- Easter egg hit-testing (Mare Tranquillitatis) ---
 {
   // Sea center: x=-0.30, y=-0.08 -> fractional (0.35, 0.46)
@@ -297,6 +345,26 @@ check('south render = mirrored north', (() => {
   check('penumbral ignored (2027-02-20)', M.eclipseState(Date.parse('2027-02-20T23:14:06Z')) === null)
   check('penumbral ignored (2030-12-09)', M.eclipseState(Date.parse('2030-12-09T22:28:51Z')) === null)
   check('no eclipse today', M.eclipseState(ms('2026-08-24T12:00:00Z')) === null)
+}
+
+// --- Umbra frame shared by the text stamp and both canvases ---
+{
+  const frame = (progress, gamma) => M.umbraFrame({ progress: progress, gamma: gamma })
+  const a = frame(0, 0), mid = frame(0.5, 0), z = frame(1, 0)
+  check('umbra radius is 2.7 disc radii', Math.abs(a.r - 2.7) < 1e-12)
+  check('umbra starts left of the disc', a.ox < 0 && Math.abs(a.ox + 3.85) < 1e-9)
+  check('umbra ends right of the disc', z.ox > 0 && Math.abs(z.ox - 3.85) < 1e-9)
+  check('umbra is centred at mid-event', Math.abs(mid.ox) < 1e-9 && Math.abs(mid.oy) < 1e-9)
+  check('umbra transits monotonically',
+    [0.05, 0.25, 0.5, 0.75, 0.95].every((p, i, arr) => i === 0 || frame(p, 0).ox > frame(arr[i - 1], 0).ox))
+  check('positive gamma rides above centre',
+    frame(0.5, 0.4).oy < 0 && frame(0.5, -0.4).oy > 0)
+  // Contact geometry: first contact clears the disc entirely, the approaches
+  // overlap it, and a central mid-event umbra envelops it (totality).
+  check('first contact is clear of the disc', Math.abs(a.ox) - a.r >= 1)
+  check('deep partials still overlap the disc',
+    Math.abs(frame(0.05, 0).ox) - a.r < 1 && Math.abs(frame(0.95, 0).ox) - a.r < 1)
+  check('mid-event totality envelops the disc', Math.abs(mid.ox) + 1 <= mid.r)
 }
 
 // --- Umbra bite stamped into text art ---

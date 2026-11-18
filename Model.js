@@ -432,34 +432,46 @@ function _stampFace(grid, rowCount, colCount, palette, wink) {
     put(i, rB, i === cBl ? "\\" : i === cBr ? "/" : "_")
 }
 
-// Stamp Earth's umbral shadow across the disk during an eclipse. Geometry
-// is deliberately simple: a fixed ~2.7-lunar-radius umbra circle (real ratio
-// sigma~0.74 Earth radii vs the Moon's 0.2725) whose center transits
-// monotonically left to right across the whole event (northern-hemisphere
-// view — the Moon moves eastward into the shadow, which is its left limb as
-// we face it), positioned by eclipse.progress rather than depth so it never
-// retreats the way it came. Vertical placement is each event's real
-// gamma normalized to lunar radii (gamma/0.2725; positive passes north of
-// center = above on screen) — which also keeps partials honest: their large
-// offsets mean the umbra edge never swallows the far limb, while totals'
-// near-central paths envelop it. A gentle cosmetic tilt adds high entry,
-// low exit.
-function _stampUmbra(grid, rows, cols, palette, eclipse) {
+// Earth's umbral shadow as a circle, in lunar radii, for every renderer
+// (text art, both canvases, clay). Geometry is deliberately simple: a fixed
+// ~2.7-lunar-radius umbra circle (real ratio sigma~0.74 Earth radii vs the
+// Moon's 0.2725) whose center transits monotonically left to right across the
+// whole event (northern-hemisphere view — the Moon moves eastward into the
+// shadow, which is its left limb as we face it), positioned by
+// eclipse.progress rather than depth so it never retreats the way it came.
+// Vertical placement is each event's real gamma normalized to lunar radii
+// (gamma/0.2725; positive passes north of center = above on screen) — which
+// also keeps partials honest: their large offsets mean the umbra edge never
+// swallows the far limb, while totals' near-central paths envelop it. A
+// gentle cosmetic tilt adds high entry, low exit.
+//   ox: umbra centre to the right of the disc centre (negative = left)
+//   oy: umbra centre below the disc centre (negative = above)
+//   r:  umbra radius
+// Renderers flip ox on screen for the southern view.
+function umbraFrame(eclipse) {
   var RU = 2.7
   var XE = RU + 1.15
-  var ox = -XE + 2 * XE * eclipse.progress
-  var oyMid = -eclipse.gamma / 0.2725
-  var oy = oyMid - 0.6 * (0.5 - eclipse.progress)
+  return {
+    ox: -XE + 2 * XE * eclipse.progress,
+    oy: -eclipse.gamma / 0.2725 - 0.6 * (0.5 - eclipse.progress),
+    r: RU
+  }
+}
+
+// Stamp the umbra across the text-art disk. Coordinates are normalized to
+// the disc radius, so umbraFrame's moon-radii values apply directly.
+function _stampUmbra(grid, rows, cols, palette, eclipse) {
+  var frame = umbraFrame(eclipse)
   var band = 0.35
   for (var j = 0; j < rows; j++) {
     var y = ((j + 0.5) / rows) * 2 - 1
     for (var i = 0; i < cols; i++) {
       if (grid[j][i] === palette.void) continue
-      var dx = ((i + 0.5) / cols) * 2 - 1 - ox
-      var dy = y - oy
+      var dx = ((i + 0.5) / cols) * 2 - 1 - frame.ox
+      var dy = y - frame.oy
       var d = Math.sqrt(dx * dx + dy * dy)
-      if (d <= RU) grid[j][i] = palette.dark
-      else if (d <= RU + band) grid[j][i] = palette.term
+      if (d <= frame.r) grid[j][i] = palette.dark
+      else if (d <= frame.r + band) grid[j][i] = palette.term
     }
   }
 }
@@ -468,7 +480,8 @@ function _stampUmbra(grid, rows, cols, palette, eclipse) {
 // `aspect` is the physical height:width ratio of one character cell (measure
 // it from the rendering font); columns are derived from it so the disk stays
 // circular instead of assuming square cells. style: "blocks" | "ascii".
-// ("vector" and "cartoon" are canvas-drawn and get blank placeholder grids.)
+// ("vector", "cartoon" and "clay" are canvas/image-drawn and get blank
+// placeholder grids.)
 // Inputs assumed caller-normalized: Panel.artRows clamps 9–41 (odd),
 // Panel.artCellAspect clamps 1.2–3; tests pass literals.
 // `eclipse` (optional, from eclipseState) darkens cells under the umbra.
@@ -477,11 +490,11 @@ function renderMoonArt(fraction, style, rows, mirror, aspect, wink, eclipse) {
 
   var colCount = Math.max(rows, Math.round(rows * aspect))
 
-  // Canvas-drawn styles (vector, cartoon): the text layer just holds
+  // Painted/image styles (vector, cartoon, clay): the text layer just holds
   // the layout, so return an all-spaces grid with identical dimensions.
   // Everything downstream (card width, tap mapping, star clearance) keeps
   // working.
-  if (style === "vector" || style === "cartoon") {
+  if (style === "vector" || style === "cartoon" || style === "clay") {
     var spaces = new Array(colCount + 1).join(" ")
     var blank = []
     for (var bi = 0; bi < rows; bi++) blank.push(spaces)
@@ -527,6 +540,35 @@ function renderMoonArt(fraction, style, rows, mirror, aspect, wink, eclipse) {
     lines.push(mirror ? line.split("").reverse().join("") : line)
   }
   return lines.join("\n")
+}
+
+// The clay style is eight painted plates rather than a computed disc. They
+// are the same eight visual states the emoji glyphs use, so the same
+// bucketing applies: each plate owns one eighth of the cycle and is centred
+// on its own phase (new, waxing crescent, first quarter, ...).
+function plateIndex(fraction) {
+  var i = Math.round(wrap01(fraction) * 8) % 8
+  return i < 0 ? i + 8 : i
+}
+
+// Crossfade partner: `a` is the plate in hand, `b` the next one, `k` how far
+// the blend has travelled between them. k is 0 at a plate's own phase and
+// approaches 1 just before it hands over, so the fade is symmetric.
+function plateBlend(fraction) {
+  var t = wrap01(fraction) * 8
+  var a = Math.floor(t) % 8
+  return { a: a, b: (a + 1) % 8, k: t - Math.floor(t) }
+}
+
+// Which plates to draw and how. The base plate stays fully opaque and the
+// next plate fades in over it: two stacked half-opacity layers would let the
+// panel background show through and would weight the outgoing plate by
+// (1 - k)^2 instead of (1 - k). With blending off, show the nearest plate at
+// full opacity, cutting at the midpoint between plates.
+function clayPlateMix(fraction, blend) {
+  if (!blend) return { base: plateIndex(fraction), top: -1, k: 0 }
+  var b = plateBlend(fraction)
+  return { base: b.a, top: b.b, k: b.k }
 }
 
 // Lookup by sea name; null when unknown.
@@ -602,6 +644,10 @@ module.exports = {
     nextNewMoonMs: nextNewMoonMs,
     nextFullMoonMs: nextFullMoonMs,
     renderMoonArt: renderMoonArt,
+    plateIndex: plateIndex,
+    plateBlend: plateBlend,
+    clayPlateMix: clayPlateMix,
+    umbraFrame: umbraFrame,
     moonState: moonState,
     CRATERS: CRATERS,
     SEAS: SEAS,
