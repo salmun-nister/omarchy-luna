@@ -1,12 +1,12 @@
 import QtQuick
 import Quickshell
-// Provides IpcHandler below — NOT removable when the v0.1.2 hemisphere
-// FileView went away, even though that was this import's other consumer.
+// Provides IpcHandler below — NOT removable.
 import Quickshell.Io
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
 import "Model.js" as Model
+import "Painters.js" as Painters
 import "art/stars.js" as Stars
 
 Panel {
@@ -22,6 +22,14 @@ Panel {
   // nested panel, so the popout identity has to be that widget.
   property var hostWidget: null
   readonly property var barIdentity: hostWidget || root
+
+  // Null-safe theme & font accessors (root.bar is null briefly before
+  // BarWidget's injectPanel() runs after Loader completion).
+  readonly property color fgColor: root.bar ? root.bar.foreground : Commons.Color.foreground
+  readonly property color mutedFg: Qt.darker(fgColor, 1.5)
+  readonly property string uiFont: root.bar ? root.bar.fontFamily : Style.font.family
+  readonly property string glyphFont: Style.resolvedFontFamily !== "monospace"
+      ? Style.resolvedFontFamily : "JetBrainsMono Nerd Font"
 
   function open() {
     openedFromHotkey = false
@@ -63,6 +71,18 @@ Panel {
       root.bar.centerHoverRevealSuppressed = value
   }
 
+  function sendNotification(summary, body) {
+    if (!root.bar) return
+    var safeSummary = String(summary).replace(/'/g, "'\\''")
+    var cmd = "omarchy-notification-send --app-name 'Luna' -g '" + Model.PLAIN_GLYPHS[4] + "' '" + safeSummary + "'"
+    if (body) {
+      var safeBody = String(body).replace(/'/g, "'\\''")
+      cmd += " '" + safeBody + "'"
+    }
+    cmd += " --exec omarchy-shell salmun-nister.luna open"
+    root.bar.run(cmd)
+  }
+
   // ---- Settings (flat keys on the bar-layout entry; see README) ----
   function _bool(value, fallback) {
     if (value === undefined || value === null) return fallback
@@ -70,18 +90,25 @@ Panel {
     return String(value).toLowerCase() === "true"
   }
 
-  readonly property bool showPercent: _bool(setting("showPercent", false), false)
-
   // Pill icon flavor: plain monochrome Nerd Font glyph by default (inherits
   // the bar's theme text color), or color emoji when set to false.
   readonly property bool plainIcon: _bool(setting("plainIcon", true), true)
 
+  // Append illumination percentage to the bar pill when enabled.
+  readonly property bool showPercent: _bool(setting("showPercent", false), false)
+
+  // Desktop notifications when a real umbral eclipse begins or enters totality.
+  readonly property bool notifyEclipse: _bool(setting("notifyEclipse", true), true)
+
   // Last-used style is persisted straight into this widget's shell.json
   // layout entry; fail-safe default is blocks.
+  readonly property var artStyles: ["blocks", "braille", "ascii", "vector", "cartoon", "clay"]
   readonly property string artStyle: {
     var s = String(setting("artStyle", "blocks")).toLowerCase()
-    return (s === "ascii" || s === "vector" || s === "cartoon" || s === "clay") ? s : "blocks"
+    return artStyles.indexOf(s) >= 0 ? s : "blocks"
   }
+
+  readonly property bool isTextArtStyle: artStyle === "blocks" || artStyle === "braille" || artStyle === "ascii"
 
   readonly property int artRows: {
     var n = parseInt(setting("artRows", 19), 10)
@@ -93,6 +120,11 @@ Panel {
   // Clay plates crossfade between the two states either side of the current
   // phase. Off gives hard cuts at the midpoint between plates.
   readonly property bool clayBlend: _bool(setting("clayBlend", true), true)
+
+  // Preload clay textures once the popup opens (or on startup if clay is
+  // active) so switching into clay is instantaneous while keeping startup
+  // light for users who haven't opened the popup yet.
+  property bool clayLoaded: false
 
   // The plates are 512px squares whose painted disc is ~81% of the width
   // (a transparent margin surrounds it). Scaling by 1/that puts the clay moon
@@ -126,31 +158,102 @@ Panel {
     return explicitHemi === "south"
   }
 
-  function cycleArtStyle() {
-    var order = ["blocks", "ascii", "vector", "cartoon", "clay"]
-    persistSettings({ artStyle: order[(order.indexOf(artStyle) + 1) % order.length] })
+  function cycleArtStyle(step) {
+    var delta = step === undefined ? 1 : step
+    var idx = artStyles.indexOf(artStyle)
+    var len = artStyles.length
+    persistSettings({ artStyle: artStyles[((idx + delta) % len + len) % len] })
   }
 
   function togglePlainIcon() {
     persistSettings({ plainIcon: !plainIcon })
   }
 
-  // Applied locally first so the panel redraws on the click itself; the
-  // shell.json write comes back through the bar as the same value (same
-  // pattern as the clock panel).
-  function persistSettings(values) {
-    var entry = { id: root.moduleName }
-    for (var existing in root.settings) if (existing !== "id") entry[existing] = root.settings[existing]
-    for (var key in values) entry[key] = values[key]
+  function toggleShowPercent() {
+    persistSettings({ showPercent: !showPercent })
+  }
 
-    root.settings = entry
-    if (root.hostWidget && "settings" in root.hostWidget) root.hostWidget.settings = entry
+  function toggleClayBlend() {
+    persistSettings({ clayBlend: !clayBlend })
+  }
+
+  function stepArtRows(delta) {
+    var next = Math.max(9, Math.min(41, artRows + delta))
+    if (next % 2 === 0) next = delta > 0 ? Math.min(41, next + 1) : Math.max(9, next - 1)
+    if (next !== artRows) persistSettings({ artRows: next })
+  }
+
+  // Applied locally immediately so style/setting changes redraw on the very
+  // next frame. Writing shell.json triggers a full bar-config reload, so while
+  // the popup is open we defer persistence until it closes (zero stutter while
+  // browsing styles) and debounce changes made while closed (e.g. middle-click).
+  property var _pendingEntry: null
+
+  Timer {
+    id: persistTimer
+    interval: 400
+    repeat: false
+    onTriggered: root.flushPersist()
+  }
+
+  function flushPersist() {
+    if (!_pendingEntry) return
+    var entry = _pendingEntry
+    _pendingEntry = null
+    if (persistTimer.running) persistTimer.stop()
     if (root.bar && root.bar.shell && typeof root.bar.shell.updateEntryInline === "function")
       root.bar.shell.updateEntryInline(root.moduleName, entry)
   }
 
-  // ---- Phase state ----
+  function persistSettings(values) {
+    var entry = { id: root.moduleName }
+    for (var existing in root.settings)
+      if (existing !== "id") entry[existing] = root.settings[existing]
+    for (var key in values) entry[key] = values[key]
+
+    root.settings = entry
+    if (root.hostWidget && "settings" in root.hostWidget) root.hostWidget.settings = entry
+    _pendingEntry = entry
+    if (!root.opened) persistTimer.restart()
+  }
+
+  Component.onCompleted: {
+    if (artStyle === "clay") clayLoaded = true
+  }
+
+  Component.onDestruction: {
+    flushPersist()
+  }
+
+  // ---- Phase & eclipse state ----
   SystemClock { id: clock; precision: SystemClock.Minutes }
+
+  // Interactive date scrubber (days offset from today; resets when panel closes).
+  property int scrubDayOffset: 0
+
+  function scrubDay(delta) {
+    if (devMode) return
+    scrubDayOffset = Math.max(-3650, Math.min(3650, scrubDayOffset + delta))
+  }
+
+  function resetScrub() {
+    scrubDayOffset = 0
+  }
+
+  function scrubToPhaseIndex(slotIndex) {
+    if (devMode) return
+    var slot = viewLunationSlots[slotIndex]
+    if (!slot) return
+    if (slotIndex === livePhaseSlot && Math.abs(slot.ms - liveNowMs) < 3 * 86400000) {
+      scrubDayOffset = 0
+      return
+    }
+    var days = Math.round((slot.ms - liveNowMs) / 86400000)
+    scrubDayOffset = Math.max(-3650, Math.min(3650, days))
+  }
+
+  readonly property real liveNowMs: clock.date.getTime()
+  readonly property real viewNowMs: liveNowMs + scrubDayOffset * 86400000
 
   // Physical height:width ratio of one monospace cell, measured from a
   // CONSTANT hidden probe rendered with the exact art font. Measuring the
@@ -175,35 +278,74 @@ Panel {
     return ratio >= 1.2 && ratio <= 3 ? ratio : 2.0
   }
 
-  readonly property var phase: Model.moonState(clock.date.getTime(), southUp)
+  // Live astronomical state (drives bar pill, notifications, and live alerts).
+  readonly property var phase: Model.moonState(liveNowMs, southUp)
+  readonly property int livePhaseSlot: Model.plateIndex(phase.fraction)
+  readonly property var eclipse: Model.eclipseState(liveNowMs)
 
-  // Active umbral lunar eclipse, or null. Null outside U1..U4 windows and
-  // for penumbral-only events (Model skips those by design).
-  readonly property var eclipse: Model.eclipseState(clock.date.getTime())
+  // Scrubber-aware panel state (zero extra work when scrubDayOffset === 0).
+  readonly property var viewPhase: scrubDayOffset === 0
+      ? phase : Model.moonState(viewNowMs, southUp)
+  readonly property var viewLunationSlots: Model.lunationSlots(viewNowMs)
+  readonly property var viewEclipse: scrubDayOffset === 0
+      ? eclipse : Model.eclipseState(viewNowMs)
+  readonly property var upcomingEclipse: Model.nextEclipse(viewNowMs)
 
-  // What the bar pill shows: emoji, or the monochrome themed glyph when the
-  // plainIcon setting is on. Notifications keep the real moon's emoji.
+  // Shown as a full-width row below the stats grid only when an umbral
+  // eclipse is within 30 days (and not currently active), or in dev mode
+  // when previewing the upcoming-eclipse stage (E × 3).
+  readonly property var soonEclipse: {
+    if (artEclipse || !upcomingEclipse) return null
+    if (devMode) return devEclipseStage === 3 ? upcomingEclipse : null
+    var delta = upcomingEclipse.u1Ms - viewNowMs
+    return (delta > 0 && delta <= 30 * 86400000) ? upcomingEclipse : null
+  }
+
+  // Desktop notification when a real umbral eclipse starts or hits totality.
+  property string _lastNotifiedEclipseKey: ""
+  onEclipseChanged: {
+    if (!notifyEclipse || !eclipse) return
+    var stage = (eclipse.kind === "total" && eclipse.depth >= 0.99) ? "totality" : "start"
+    var key = eclipse.greatestMs + ":" + stage
+    if (key === _lastNotifiedEclipseKey) return
+    _lastNotifiedEclipseKey = key
+    var title = stage === "totality" ? "Total Lunar Eclipse" : eclipse.label
+    var body = stage === "totality"
+        ? "Totality has begun — click to view"
+        : "Umbral eclipse has begun — click to view"
+    sendNotification(title, body)
+  }
+
+  // Eclipse state driving panel visuals: dev preview XOR view event.
+  readonly property var artEclipse: devMode ? devEclipsePreview : viewEclipse
+
+  // Bar pill mirrors dev mode previews (for testing tint/halo/hemisphere)
+  // while staying anchored to the real moon during normal date scrubbing.
+  readonly property var pillPhase: devMode ? displayPhase : phase
+  readonly property var pillEclipse: devMode ? devEclipsePreview : eclipse
+  readonly property real pillEclipseDepth: pillEclipse ? pillEclipse.depth : 0
+
   readonly property string pillGlyph: plainIcon
-      ? Model.plainGlyphFor(displayPhase.fraction, displaySouthUp)
-      : displayPhase.glyph
-  readonly property string label: pillGlyph + (showPercent ? " " + displayPhase.illuminationPct + "%" : "")
-  readonly property string tooltipText: displayPhase.phaseName + " · " + displayPhase.illuminationPct + "% illuminated"
-      + (artEclipse ? " — " + artEclipse.label : "")
+      ? Model.plainGlyphFor(pillPhase.fraction, displaySouthUp)
+      : pillPhase.glyph
+  readonly property string label: pillGlyph
+  readonly property string percentLabel: showPercent ? (pillPhase.illuminationPct + "%") : ""
+  readonly property string tooltipText: pillPhase.phaseName + " · " + pillPhase.illuminationPct + "% illuminated"
+      + (pillEclipse ? " — " + pillEclipse.label : "")
   readonly property string notificationSummary: phase.glyph + " " + phase.phaseName + " — " + phase.illuminationPct + "% illuminated"
-      + (eclipse ? " (" + eclipse.label + ")" : "")
+      + (phase.fullMoon ? " (" + phase.fullMoon.label + ")" : "")
+      + (eclipse ? " [" + eclipse.label + "]" : "")
 
-  // Eclipse state driving all visuals: real event XOR dev preview.
-  readonly property var artEclipse: devMode ? devEclipsePreview : eclipse
-  // Pill styling inputs for BarWidget (tint on plain glyph, halo on emoji).
-  readonly property real pillEclipseDepth: artEclipse ? artEclipse.depth : 0
+  readonly property string moonArt: Model.renderMoonArt(
+      displayFraction, artStyle, layoutRows, displaySouthUp, artCellAspect, artEclipse)
 
-  readonly property string moonArt: Model.renderMoonArt(displayFraction, artStyle, layoutRows, displaySouthUp, artCellAspect, winkNow, artEclipse)
+  // Hovered crater / mare name (populated for blocks/braille/ascii styles).
+  property string hoveredFeature: ""
 
   // Decorative sky around the disk: REGENERATED with new random positions
-  // every time the popup opens or the style changes. Rejection sampling
+  // every time the popup opens or the style/size changes. Rejection sampling
   // keeps glyphs inside an edge band, clear of the lunar disk, and spaced
-  // apart from each other. Twinkle loops are gated on `opened` so nothing
-  // animates while the panel is hidden.
+  // apart from each other. Twinkle loops are gated on `opened && artStyle !== "clay"`.
   property var starField: []
 
   function _shuffleStars() {
@@ -213,13 +355,11 @@ Panel {
     if (W <= 0 || H <= 0 || !moonText.implicitHeight) return
     var cx = W / 2
     var cy = H / 2
-    // Moon is a circle spanning the art square; add margin for the glyph.
     var clearR = Math.max(moonText.implicitWidth, moonText.implicitHeight) / 2 + Style.space(16)
     var placed = []
     var tries = 0
     while (placed.length < 12 && tries < 800) {
       tries++
-      // Pick an edge band: hugging one border, sliding along it.
       var edge = Math.floor(Math.random() * 4)
       var along = 0.04 + Math.random() * 0.92
       var depth = 0.05 + Math.random() * 0.13
@@ -251,13 +391,31 @@ Panel {
     starField = placed
   }
 
-  onOpenedChanged: if (opened) Qt.callLater(_shuffleStars)
-  onArtStyleChanged: if (root.opened) Qt.callLater(_shuffleStars)
+  onOpenedChanged: {
+    if (opened) {
+      clayLoaded = true
+      Qt.callLater(_shuffleStars)
+      if (moonCanvas.visible) moonCanvas.requestPaint()
+      if (clayShadow.visible) clayShadow.requestPaint()
+    } else {
+      scrubDayOffset = 0
+      hoveredFeature = ""
+      stopEggs()
+      if (_pendingEntry) persistTimer.restart()
+    }
+  }
+  onArtStyleChanged: {
+    if (artStyle === "clay") clayLoaded = true
+    hoveredFeature = ""
+    stopEggs()
+    if (root.opened && artStyle !== "clay") Qt.callLater(_shuffleStars)
+  }
+  onArtRowsChanged: {
+    if (root.opened && artStyle !== "clay") Qt.callLater(_shuffleStars)
+  }
 
   // Canvas faces wink their right eye at random: uniform 10–60 s gaps
-  // (about 35 s on average), same cadence for both styles. Driven by a
-  // fixed heartbeat + countdown so we never mutate Timer.interval
-  // mid-flight (its restart semantics proved unreliable).
+  // (about 35 s on average), same cadence for both styles.
   property bool winkNow: false
 
   Timer {
@@ -284,8 +442,6 @@ Panel {
   }
 
   function nextWinkMs() {
-    // Dev mode: rapid 3s winks for testing. Otherwise a random cooldown:
-    // at least 10s, at most 60s.
     if (root.devMode) return 3000
     return 10000 + Math.floor(Math.random() * 50000)
   }
@@ -298,23 +454,23 @@ Panel {
 
   Timer {
     id: devCycle
-    interval: 1000
+    interval: 50
     repeat: true
-    // Eclipse preview pins the phase at full moon, so nothing to advance.
-    running: root.devMode && root.devEclipseStage === 0 && root.opened
-    onTriggered: root.devFraction = (root.devFraction + 0.05) % 1.0
+    // Active eclipse previews pin the phase at full moon; off & upcoming keep cycling.
+    running: root.devMode && root.devEclipsePreview === null && root.opened
+    onTriggered: root.devFraction = (root.devFraction + 0.005) % 1.0
   }
 
   function toggleDev() {
     devMode = !devMode
     if (devMode) {
-      devFraction = phase.fraction
+      devFraction = viewPhase.fraction
       devSouth = southUp
       devQuiet = false
     } else {
       devEclipseStage = 0
     }
-    remainMs = nextWinkMs()
+    winkTick.remainMs = nextWinkMs()
   }
 
   property bool devSouth: false
@@ -331,54 +487,63 @@ Panel {
     devQuiet = !devQuiet
   }
 
-  // Eclipse preview: while dev mode is on, E picks what animates — first
-  // press runs a partial eclipse start-to-end, second a total one, third
-  // switches off. Each sweep loops until changed. Lunar eclipses only happen
-  // at full moon, so any active preview also pins the phase there (see
-  // displayFraction).
-  property int devEclipseStage: 0   // 0 = off · 1 = partial anim · 2 = total anim
+  // Eclipse preview: while dev mode is on, E cycles partial -> total -> soon -> off.
+  property int devEclipseStage: 0   // 0 = off · 1 = partial · 2 = total · 3 = soon row
   property real devEclipseT: 0      // 0..1 progress through the event
+  property real _previewEclipseU1Ms: 0
 
   Timer {
     id: devEclipseAnim
-    interval: 100                   // 100 ticks × 0.01 = 10 s per sweep
+    interval: 50                    // 200 ticks × 0.005 = 10 s smooth sweep (20 fps)
     repeat: true
-    running: root.devMode && root.devEclipseStage > 0 && root.opened
-    onTriggered: root.devEclipseT = (root.devEclipseT + 0.01) % 1.0
+    running: root.devMode && (root.devEclipseStage === 1 || root.devEclipseStage === 2) && root.opened
+    onTriggered: root.devEclipseT = (root.devEclipseT + 0.005) % 1.0
   }
 
   readonly property var devEclipsePreview: {
-    if (devEclipseStage === 0 || !devMode) return null
+    if ((devEclipseStage !== 1 && devEclipseStage !== 2) || !devMode) return null
     var total = devEclipseStage === 2
     var t = devEclipseT
-    // Depth profile: partial swells to its peak and back; total ramps into
-    // a totality plateau, then out. Shadow position is time-driven (see
-    // Model._stampUmbra); the two flavors carry realistic gammas so one
-    // passes below the disk and the other slightly above, like real events.
     var peak = total ? 1.0 : 0.93
     var d
     if (!total) d = peak * (t <= 0.5 ? t / 0.5 : (1 - t) / 0.5)
     else if (t < 0.3) d = t / 0.3
     else if (t <= 0.7) d = 1.0
     else d = (1 - t) / 0.3
+    var spanMs = 220 * 60000        // 3h 40m umbral transit
+    var u1 = (_previewEclipseU1Ms > 0 ? _previewEclipseU1Ms : liveNowMs)
+    var greatest = u1 + Math.round(spanMs * 0.5)
+    var u2 = total ? u1 + Math.round(spanMs * 0.3) : greatest
+    var u3 = total ? u1 + Math.round(spanMs * 0.7) : greatest
+    var u4 = u1 + spanMs
+    var simNow = u1 + Math.round(t * spanMs)
     return { kind: total ? "total" : "partial",
              label: total ? "Total Lunar Eclipse" : "Partial Lunar Eclipse",
              depth: Math.max(0, Math.min(1, d)), peak: peak,
              gamma: total ? 0.12 : -0.5,
-             progress: t }
+             progress: t,
+             u1Ms: u1, u2Ms: u2, greatestMs: greatest, u3Ms: u3, u4Ms: u4,
+             simNowMs: simNow }
   }
 
   function cycleDevEclipse() {
     if (!devMode) return
-    devEclipseStage = (devEclipseStage + 1) % 3
-    devEclipseT = 0                 // every selection starts at first contact
+    devEclipseStage = (devEclipseStage + 1) % 4
+    devEclipseT = 0
+    _previewEclipseU1Ms = liveNowMs
   }
 
   readonly property real displayFraction: devEclipsePreview ? 0.5
-      : devMode ? devFraction : phase.fraction
-  // Panel-side phase info follows dev mode; the bar pill keeps the real moon.
-  // Vector-style easter egg: tapping the smile sticks the tongue out
-  // for a moment before it slides back in.
+      : devMode ? devFraction : viewPhase.fraction
+
+  // Lightweight display state in dev mode (avoids recomputing Meeus syzygies
+  // every tick and stays pinned to Full Moon during dev eclipse previews).
+  readonly property var displayPhase: root.devMode
+      ? Model.moonDisplayState(displayFraction, displaySouthUp)
+      : root.viewPhase
+
+  // ---- Easter eggs ----
+  // 1) Vector: smile tap sticks out the tongue.
   property bool tongueOut: false
 
   Timer {
@@ -393,50 +558,120 @@ Panel {
     tongueTimer.restart()
   }
 
-  readonly property var displayPhase: root.devMode
-      ? Model.moonState(clock.date.getTime(), displaySouthUp, devFraction)
-      : root.phase
+  // 2) Cartoon: nose boop triggers joyful star-eyes + squash-and-stretch bounce.
+  property bool cartoonBooped: false
 
-  // ---- Easter egg ----
-  // Clicking Mare Tranquillitatis sends a little saucer across the sky while
-  // a tiny resident waves from the surface. Works in any phase and either
-  // hemisphere (seaHit handles the mirror). One flight at a time.
-  property bool eggRunning: false
+  Timer {
+    id: boopTimer
+    interval: 1400
+    repeat: false
+    onTriggered: root.cartoonBooped = false
+  }
 
-  // Saucer orbit geometry: circles a hover point just above the resident.
-  readonly property real eggOrbitR: Style.space(30)
-  readonly property real eggOrbitCx: artContainer.eggManX
-  readonly property real eggOrbitCy: Math.max(Style.space(44), artContainer.eggManY - moonMan.height - Style.space(50))
+  function boopCartoon() {
+    cartoonBooped = true
+    boopTimer.restart()
+    boopAnim.restart()
+  }
 
-  function startEgg() {
-    if (eggRunning || !root.opened) return
-    eggRunning = true
-    eggSequence.restart()
+  // 3) Clay: top-rim tap pops a little theme-colored pennant out of the crest.
+  property bool clayFlagRunning: false
+
+  function popClayFlag() {
+    if (clayFlagRunning || !root.opened) return
+    clayFlagRunning = true
+    clayFlagSequence.restart()
+  }
+
+  // 4) Text styles (blocks / braille / ascii): Mare Tranquillitatis tap lands
+  // a tiny Apollo 11 Eagle module on Tranquillity Base.
+  property bool eagleRunning: false
+
+  function startEagle() {
+    if (eagleRunning || !root.opened) return
+    eagleRunning = true
+    eagleSequence.restart()
   }
 
   function triggerEgg() {
     if (!root.opened) root.openFromHotkey()
-    Qt.callLater(function() { if (root.opened) root.startEgg() })
+    Qt.callLater(function() {
+      if (!root.opened) return
+      if (root.isTextArtStyle) root.startEagle()
+      else if (root.artStyle === "vector") root.stickTongue()
+      else if (root.artStyle === "cartoon") root.boopCartoon()
+      else if (root.artStyle === "clay") root.popClayFlag()
+    })
   }
 
-  // Beam endpoints in artContainer coordinates; the Canvas repaints from
-  // these on every saucer move.
-  property real eggBeamSrcX: 0
-  property real eggBeamSrcY: 0
-  property real eggBeamTgtX: 0
-  property real eggBeamTgtY: 0
+  function stopEggs() {
+    if (eagleSequence.running) eagleSequence.stop()
+    if (thrusterAnim.running) thrusterAnim.stop()
+    eagleLander.visible = false
+    eagleLander.opacity = 0
+    eagleFlame.opacity = 0
+    eagleBanner.visible = false
+    eagleBanner.opacity = 0
+    eagleRunning = false
 
-  // Aim the beam from the saucer's belly at the resident's head.
-  function updateBeam() {
-    eggBeamSrcX = ufoText.x + ufoText.implicitWidth / 2
-    eggBeamSrcY = ufoText.y + ufoText.implicitHeight
-    eggBeamTgtX = artContainer.eggManX
-    eggBeamTgtY = artContainer.eggManY - moonMan.height * 0.5
-    beamRect.requestPaint()
+    if (clayFlagSequence.running) clayFlagSequence.stop()
+    clayFlag.visible = false
+    clayFlag.opacity = 0
+    clayFlagRunning = false
+
+    if (boopAnim.running) boopAnim.stop()
+    if (boopTimer.running) boopTimer.stop()
+    if (tongueTimer.running) tongueTimer.stop()
+    moonCanvas.scale = 1.0
+    cartoonBooped = false
+    tongueOut = false
   }
 
+  // ---- Date & duration formatting ----
   function formatDate(ms) {
     return Qt.formatDate(new Date(ms), "ddd d MMM")
+  }
+
+  function formatShortDate(ms) {
+    return Qt.formatDate(new Date(ms), "MMM d")
+  }
+
+  function formatScrubDate(ms) {
+    var sign = scrubDayOffset > 0 ? "+" : ""
+    return Qt.formatDate(new Date(ms), "ddd d MMM yyyy") + " (" + sign + scrubDayOffset + "d)"
+  }
+
+  function formatCountdown(deltaMs) {
+    if (deltaMs <= 60000) return "<1m"
+    var mins = Math.round(deltaMs / 60000)
+    if (mins < 60) return mins + "m"
+    var h = Math.floor(mins / 60)
+    var m = mins % 60
+    return m > 0 ? (h + "h " + m + "m") : (h + "h")
+  }
+
+  function formatClockTime(ms) {
+    return Qt.formatTime(new Date(ms), "HH:mm")
+  }
+
+  function formatEclipseHeadline(ecl) {
+    if (!ecl) return ""
+    if (!ecl.u4Ms) return ecl.label
+    var now = ecl.simNowMs !== undefined ? ecl.simNowMs : viewNowMs
+    if (ecl.kind === "total" && now < ecl.u2Ms)
+      return ecl.label + " · Totality in " + formatCountdown(ecl.u2Ms - now)
+    if (ecl.kind === "total" && now <= ecl.u3Ms)
+      return ecl.label + " · Totality ends in " + formatCountdown(ecl.u3Ms - now)
+    if (now < ecl.greatestMs)
+      return ecl.label + " · Peak in " + formatCountdown(ecl.greatestMs - now)
+    return ecl.label + " · Ends in " + formatCountdown(ecl.u4Ms - now)
+  }
+
+  function formatSoonEclipse(ecl) {
+    if (!ecl) return ""
+    var dateStr = Qt.formatDate(new Date(ecl.greatestMs), "ddd d MMM")
+    if (ecl.kind === "total") return dateStr + " · Total Lunar Eclipse"
+    return dateStr + " · Partial (" + Math.round(ecl.magnitude * 100) + "%)"
   }
 
   IpcHandler {
@@ -447,7 +682,7 @@ Panel {
     function show() { root.openFromHotkey() }
     function hide() { root.close() }
     function toggle() { root.toggle() }
-    function restyle() { root.cycleArtStyle() }
+    function restyle() { root.cycleArtStyle(1) }
     function icon() { root.togglePlainIcon() }
     function egg() { root.triggerEgg() }
     function dev() { root.toggleDev() }
@@ -464,37 +699,35 @@ Panel {
         artPx: [Math.round(moonText.implicitWidth), Math.round(moonText.implicitHeight)],
         contentW: panel.contentWidth,
         contentH: panel.contentHeight,
-        egg: root.eggRunning,
+        egg: root.eagleRunning || root.clayFlagRunning || root.cartoonBooped || root.tongueOut,
         dev: root.devMode,
+        scrubDays: root.scrubDayOffset,
         quiet: root.devQuiet,
         southUp: root.displaySouthUp,
         eclipse: (function() {
           var e = root.artEclipse
           if (!e) return null
           var f = Model.umbraFrame(e)
+          var flip = root.displaySouthUp ? -1 : 1
           return { kind: e.kind, depth: Math.round(e.depth * 1000) / 1000,
                    label: e.label, devPreview: root.devMode,
                    progress: Math.round(e.progress * 1000) / 1000,
                    // Umbra centre and radius in disc radii (south view
                    // mirrors the x axis on screen, as the renderers do).
-                   shadow: [Math.round(f.ox * 1000) / 1000,
+                   shadow: [Math.round(flip * f.ox * 1000) / 1000,
                             Math.round(f.oy * 1000) / 1000,
                             Math.round(f.r * 1000) / 1000] }
         })(),
+        soonEclipse: root.soonEclipse ? root.formatSoonEclipse(root.soonEclipse) : null,
         plainIcon: root.plainIcon,
+        showPercent: root.showPercent,
         frac: Math.round(root.displayFraction * 1000) / 1000,
         scene: {
-          ufo: [Math.round(ufoText.x), Math.round(ufoText.y), Math.round(ufoText.implicitWidth), Math.round(ufoText.implicitHeight), +ufoText.opacity.toFixed(2), ufoText.visible],
-          man: [Math.round(moonMan.x), Math.round(moonMan.y), +moonMan.opacity.toFixed(2), moonMan.visible],
-          beam: [Math.round(root.eggBeamSrcX), Math.round(root.eggBeamSrcY), +beamRect.opacity.toFixed(2)],
-          beamEnd: [Math.round(root.eggBeamTgtX), Math.round(root.eggBeamTgtY)],
-          manAnchor: (function() {
-            return [Math.round(artContainer.eggManX), Math.round(artContainer.eggManY - moonMan.height * 0.5)]
-          })(),
+          eagleAnchor: [Math.round(artContainer.eggManX), Math.round(artContainer.eggManY)],
           contW: Math.round(artContainer.width),
           contH: Math.round(artContainer.height)
         },
-        stars: root.starField.map(function(s) { return [+s.fx.toFixed(3), +s.fy.toFixed(3)] })
+        stars: root.starField.map(function(st) { return [+st.fx.toFixed(3), +st.fy.toFixed(3)] })
       })
       console.log("luna.status", s)
       return s
@@ -511,16 +744,24 @@ Panel {
     // Size the card to the PADDED art container, not the raw text: otherwise
     // the container (which carries the breathing room) overflows the card and
     // the moon/stars end up pressed against the window edge.
-    contentWidth: panel.fittedContentWidth(Math.max(Style.space(300), Math.ceil(artContainer.width)))
+    contentWidth: panel.fittedContentWidth(Math.max(Style.space(310), Math.ceil(artContainer.width)))
     contentHeight: panel.fittedContentHeight(content.implicitHeight)
 
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      onReturnRequested: root.cycleArtStyle()
-      onTextKey: function(t) {
-        if (t === "s" || t === "S") root.cycleArtStyle()
+      onReturnRequested: root.cycleArtStyle(1)
+      onTextKey: function(t, modifiers) {
+        if (t === "S" || (t === "s" && (modifiers & Qt.ShiftModifier))) root.cycleArtStyle(-1)
+        else if (t === "s") root.cycleArtStyle(1)
         else if (t === "i" || t === "I") root.togglePlainIcon()
+        else if (t === "%") root.toggleShowPercent()
+        else if (t === "b" || t === "B") root.toggleClayBlend()
+        else if (t === "+" || t === "=") root.stepArtRows(2)
+        else if (t === "-") root.stepArtRows(-2)
+        else if (t === "[" || t === ",") root.scrubDay(-1)
+        else if (t === "]" || t === ".") root.scrubDay(1)
+        else if (t === "t" || t === "T" || t === "0") root.resetScrub()
         else if (t === "e" || t === "E") root.cycleDevEclipse()
         else if (t === "n" || t === "N") root.toggleDevHemisphere()
         else if (t === "q" || t === "Q") root.toggleDevQuiet()
@@ -532,25 +773,88 @@ Panel {
       Column {
         id: content
         width: parent.width
-        spacing: Style.space(14)
+        spacing: Style.space(12)
 
-        Text {
-          id: title
+        // Header row: phase title flanked by subtle day-stepper buttons.
+        Item {
           width: parent.width
-          text: root.displayPhase.phaseName
-          color: root.bar.foreground
-          font.family: root.bar ? root.bar.fontFamily : Style.font.family
-          font.pixelSize: Style.font.subtitle
-          font.bold: true
+          height: title.implicitHeight
+
+          Text {
+            id: prevDayBtn
+            visible: !root.devMode
+            anchors.left: parent.left
+            anchors.verticalCenter: parent.verticalCenter
+            text: "‹"
+            color: prevDayHover.hovered ? root.fgColor : root.mutedFg
+            font.family: root.uiFont
+            font.pixelSize: Style.font.subtitle
+            font.bold: true
+
+            HoverHandler { id: prevDayHover; cursorShape: Qt.PointingHandCursor }
+            TapHandler { onTapped: root.scrubDay(-1) }
+          }
+
+          Text {
+            id: title
+            anchors.centerIn: parent
+            text: root.displayPhase.phaseName
+            color: root.fgColor
+            font.family: root.uiFont
+            font.pixelSize: Style.font.subtitle
+            font.bold: true
+            horizontalAlignment: Text.AlignHCenter
+          }
+
+          Text {
+            id: nextDayBtn
+            visible: !root.devMode
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            text: "›"
+            color: nextDayHover.hovered ? root.fgColor : root.mutedFg
+            font.family: root.uiFont
+            font.pixelSize: Style.font.subtitle
+            font.bold: true
+
+            HoverHandler { id: nextDayHover; cursorShape: Qt.PointingHandCursor }
+            TapHandler { onTapped: root.scrubDay(1) }
+          }
+        }
+
+        // Scrubber date indicator (clickable to snap back to today).
+        Text {
+          width: parent.width
+          visible: !root.devMode && root.scrubDayOffset !== 0
+          text: root.formatScrubDate(root.viewNowMs) + " · [T] Today"
+          color: Commons.Color.accent
+          font.family: root.uiFont
+          font.pixelSize: Style.font.caption
+          horizontalAlignment: Text.AlignHCenter
+
+          HoverHandler { cursorShape: Qt.PointingHandCursor }
+          TapHandler { onTapped: root.resetScrub() }
+        }
+
+        // Traditional full-moon name & Supermoon / Micromoon / Blue Moon badge.
+        Text {
+          width: parent.width
+          visible: !root.devMode && root.viewPhase.fullMoon !== null
+          text: root.viewPhase.fullMoon ? root.viewPhase.fullMoon.label : ""
+          color: (root.viewPhase.fullMoon && (root.viewPhase.fullMoon.isSuper || root.viewPhase.fullMoon.isBlue))
+              ? Commons.Color.accent : root.mutedFg
+          font.family: root.uiFont
+          font.pixelSize: Style.font.bodySmall
           horizontalAlignment: Text.AlignHCenter
         }
 
+        // Active lunar eclipse banner (with live countdown when not in dev mode).
         Text {
           width: parent.width
           visible: root.artEclipse !== null
-          text: root.artEclipse ? root.artEclipse.label : ""
+          text: root.formatEclipseHeadline(root.artEclipse)
           color: Commons.Color.urgent
-          font.family: root.bar ? root.bar.fontFamily : Style.font.family
+          font.family: root.uiFont
           font.pixelSize: Style.font.bodySmall
           font.bold: true
           horizontalAlignment: Text.AlignHCenter
@@ -559,44 +863,56 @@ Panel {
         Item {
           id: artContainer
           anchors.horizontalCenter: parent.horizontalCenter
-          // Breathing room around the moon and the star field on all sides.
+          // Breathing room around the moon and star field; constant across all
+          // styles so switching to/from clay never resizes the popup.
           width: moonText.implicitWidth + Style.space(80)
-          height: moonText.implicitHeight + Style.space(48)
-          // The saucer enters/exits beyond the text bounds; keep the scene
-          // inside the card.
+          height: Math.max(moonText.implicitHeight + Style.space(48), Math.ceil(clayStack.height))
           clip: true
 
-          // One tap target for every style. The clay stack is larger than the
-          // text layer and the two overlap, so a handler on each would both
-          // fire on a single click and advance two styles at once. The
-          // container owns the tap instead; each style's own bounds decide
-          // whether the click counts, and where it landed.
+          // Scroll wheel over the moon scrubs ±1 day.
+          WheelHandler {
+            acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+            onWheel: function(event) {
+              if (event.angleDelta.y > 0) root.scrubDay(1)
+              else if (event.angleDelta.y < 0) root.scrubDay(-1)
+            }
+          }
+
+          // One tap target for every style so overlapping layers never
+          // advance two styles at once.
           TapHandler {
             id: artTap
             onTapped: function() {
               var p = artTap.point.position
               if (root.artStyle === "clay") {
-                // The plates take no input of their own, so the whole stack
-                // (moon plus its stars) is the target.
-                if (clayStack.contains(clayStack.mapFromItem(artContainer, p.x, p.y)))
-                  root.cycleArtStyle()
+                var cp = clayStack.mapFromItem(artContainer, p.x, p.y)
+                if (!clayStack.contains(cp)) return
+                if (Model.clayFlagHit(cp.x, cp.y, clayStack.width, clayStack.height, root.clayDiscFrac))
+                  root.popClayFlag()
+                else
+                  root.cycleArtStyle(1)
                 return
               }
               var q = moonText.mapFromItem(artContainer, p.x, p.y)
               if (q.x < 0 || q.y < 0 ||
                   q.x > moonText.implicitWidth || q.y > moonText.implicitHeight)
                 return
-              // Unless the tap lands in Mare Tranquillitatis, which belongs
-              // to the easter egg.
               var fx = q.x / Math.max(1, moonText.implicitWidth)
               var fy = q.y / Math.max(1, moonText.implicitHeight)
-              if (root.artStyle === "ascii" && Model.seaHit(fx, fy, root.displaySouthUp)) root.startEgg()
+              if (root.isTextArtStyle && Model.seaHit(fx, fy, root.displaySouthUp))
+                root.startEagle()
               else if (root.artStyle === "vector" &&
-                       Model.vecMouthHit(q.x, q.y, moonText.implicitWidth, moonText.implicitHeight)) root.stickTongue()
-              else root.cycleArtStyle()
+                       Model.vecMouthHit(q.x, q.y, moonText.implicitWidth, moonText.implicitHeight))
+                root.stickTongue()
+              else if (root.artStyle === "cartoon" &&
+                       Model.cartoonFaceHit(q.x, q.y, moonText.implicitWidth, moonText.implicitHeight))
+                root.boopCartoon()
+              else
+                root.cycleArtStyle(1)
             }
           }
 
+          // Dev-mode status line (bottom-left).
           Text {
             anchors.left: parent.left
             anchors.leftMargin: Style.space(12)
@@ -604,16 +920,26 @@ Panel {
             visible: root.devMode && !root.devQuiet
             text: {
               var parts = [root.artStyle]
-              if (root.devEclipseStage > 0) {
-                var k = root.devEclipsePreview && root.devEclipsePreview.kind === "total"
-                        ? "total" : "partial"
-                parts.push("eclipse:" + k)
-              }
+              if (root.devEclipseStage === 1) parts.push("eclipse:partial")
+              else if (root.devEclipseStage === 2) parts.push("eclipse:total")
+              else if (root.devEclipseStage === 3) parts.push("eclipse:soon")
               parts.push(root.displaySouthUp ? "south" : "north")
               return parts.join(" | ")
             }
             color: Commons.Color.accent
-            font.family: root.bar.fontFamily
+            font.family: root.uiFont
+            font.pixelSize: Style.font.caption
+          }
+
+          // Interactive crater / mare hover label (bottom-right, text-art styles).
+          Text {
+            anchors.right: parent.right
+            anchors.rightMargin: Style.space(12)
+            anchors.bottom: parent.bottom
+            visible: root.hoveredFeature !== "" && root.isTextArtStyle && !root.eagleRunning
+            text: root.hoveredFeature
+            color: root.mutedFg
+            font.family: root.uiFont
             font.pixelSize: Style.font.caption
           }
 
@@ -625,521 +951,96 @@ Panel {
             // During an eclipse the whole disk shifts red with depth.
             color: {
               var d = root.artEclipse ? root.artEclipse.depth : 0
-              if (d <= 0) return root.bar.foreground
-              return Qt.tint(root.bar.foreground, Qt.rgba(Commons.Color.urgent.r, Commons.Color.urgent.g, Commons.Color.urgent.b, Math.min(1, d * 0.85)))
+              if (d <= 0) return root.fgColor
+              return Qt.tint(root.fgColor, Qt.rgba(Commons.Color.urgent.r, Commons.Color.urgent.g, Commons.Color.urgent.b, Math.min(1, d * 0.85)))
             }
             font.family: "monospace"
             font.pixelSize: Style.font.caption
 
-            // Tap handling lives on artContainer: the clay stack overlaps
-            // this layer, and a handler here would fire as well.
             HoverHandler {
+              id: moonHover
               cursorShape: Qt.PointingHandCursor
+              onHoveredChanged: if (!hovered) root.hoveredFeature = ""
+              onPointChanged: {
+                if (!hovered || !root.isTextArtStyle || moonText.implicitWidth <= 0 || moonText.implicitHeight <= 0) {
+                  root.hoveredFeature = ""
+                  return
+                }
+                var fx = point.position.x / moonText.implicitWidth
+                var fy = point.position.y / moonText.implicitHeight
+                root.hoveredFeature = Model.featureAt(fx, fy, root.displayFraction, root.displaySouthUp) || ""
+              }
             }
           }
 
-          // Canvas-drawn styles: "vector" (friendly yellow cartoon moon)
-          // and "cartoon" (1930s rubber-hose style monochrome, theme
-          // colors only). The text layer above stays as an invisible
-          // placeholder so card sizing, tap mapping and star layout all
-          // keep their geometry.
+          // Canvas-drawn styles: "vector" and "cartoon". The text layer above
+          // stays as an invisible placeholder so card sizing, tap mapping, and
+          // star layout keep their geometry.
           Canvas {
             id: moonCanvas
             anchors.fill: moonText
             visible: root.artStyle === "vector" || root.artStyle === "cartoon"
+            transformOrigin: Item.Center
 
             readonly property var _sig: [
-              width, height, root.displayFraction, root.winkNow, root.displaySouthUp,
-              root.artStyle, root.tongueOut,
-              root.bar ? root.bar.foreground.toString() : "",
+              width, height, root.displayFraction, root.winkNow,
+              root.artStyle, root.tongueOut, root.cartoonBooped,
+              root.fgColor.toString(),
+              Commons.Color.background.toString(),
+              Commons.Color.accent.toString(),
               JSON.stringify(root.artEclipse)
             ]
-            on_SigChanged: requestPaint()
-            onVisibleChanged: if (visible) requestPaint()
-            Component.onCompleted: requestPaint()
+            on_SigChanged: if (visible && root.opened) requestPaint()
+            onVisibleChanged: if (visible && root.opened) requestPaint()
 
             onPaint: {
               var ctx = getContext("2d")
               ctx.reset()
-              if (root.artStyle === "cartoon")
-                paintHose(ctx, width, height)
-              else
-                paintVector(ctx, width, height)
-            }
-
-            // Shared phase-region path: the area between the lit limb and
-            // the terminator. x_b = cx + dir*t*R*cos(a) is continuous
-            // across crescent (t>0), quarter (t=0) and gibbous/full (t<0).
-            function regionPath(ctx, w, h, dir, t) {
-              var cx = w / 2
-              var cy = h / 2
-              var R = Math.min(w, h) / 2 * 0.97
-              ctx.beginPath()
-              var N = 48
-              for (var i = 0; i <= N; i++) {
-                var ang = -Math.PI / 2 + Math.PI * i / N
-                var x = cx + dir * R * Math.cos(ang)
-                var y = cy + R * Math.sin(ang)
-                i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)
-              }
-              for (var j = N; j >= 0; j--) {
-                var a2 = -Math.PI / 2 + Math.PI * j / N
-                ctx.lineTo(cx + dir * t * R * Math.cos(a2), cy + R * Math.sin(a2))
-              }
-              ctx.closePath()
-            }
-
-            function paintVector(ctx, w, h) {
-              if (w < 10 || h < 10) return
-              var cx = w / 2
-              var cy = h / 2
-              var R = Math.min(w, h) / 2 * 0.97
-
-              // Warm illustrative palette; the only non-theme colors in the
-              // plugin, confined to this character illustration.
-              var LIT = "#F7D96C"
-              var DARK = "#C9A94F"
-              var INK = "#5B4423"
-              var RIM = "rgba(122,92,32,0.4)"
-
-              var f = root.displayFraction
-              var t = Math.cos(2 * Math.PI * f)
-              var dir = f < 0.5 ? 1 : -1 // lit limb side: +1 right (waxing)
-
-              // Dark base disc, then the lit region on top.
-              ctx.beginPath()
-              ctx.arc(cx, cy, R, 0, 2 * Math.PI)
-              ctx.fillStyle = DARK
-              ctx.fill()
-
-              regionPath(ctx, w, h, dir, t)
-              ctx.fillStyle = LIT
-              ctx.fill()
-
-              // A few soft craters, clipped to the lit area.
-              ctx.save()
-              regionPath(ctx, w, h, dir, t)
-              ctx.clip()
-              ctx.fillStyle = "rgba(90,68,35,0.16)"
-              var craters = [
-                [-0.42, -0.34, 0.10], [0.30, 0.42, 0.08], [0.52, -0.12, 0.06],
-                [-0.15, 0.55, 0.05], [0.62, 0.28, 0.05]
-              ]
-              for (var c = 0; c < craters.length; c++) {
-                ctx.beginPath()
-                ctx.arc(cx + craters[c][0] * R, cy + craters[c][1] * R, craters[c][2] * R, 0, 2 * Math.PI)
-                ctx.fill()
-              }
-              ctx.restore()
-
-              // Eclipse: wash the whole disk toward blood red with depth,
-              // then darken the umbra core with a soft radial gradient.
-              // Drawn before the face so the character stays readable.
-              if (root.artEclipse && root.artEclipse.depth > 0) {
-                var ecl = root.artEclipse
-                ctx.save()
-                ctx.beginPath()
-                ctx.arc(cx, cy, R, 0, 2 * Math.PI)
-                ctx.clip()
-                ctx.fillStyle = "rgba(186,62,48," + Math.min(1, ecl.depth * 0.72) + ")"
-                ctx.fillRect(0, 0, w, h)
-                // Umbra center: time-driven transit (shared with the text
-                // art and clay); flipped for southern hemisphere like
-                // everything else canvas-drawn.
-                var ufV = Model.umbraFrame(ecl)
-                var RUv = ufV.r * R
-                var flipV = root.displaySouthUp ? -1 : 1
-                var oxV = flipV * ufV.ox * R
-                var oyV = ufV.oy * R
-                var coreA = 0.55 * Math.min(1, ecl.depth)
-                var gv = ctx.createRadialGradient(cx + oxV, cy + oyV, R * 0.1, cx + oxV, cy + oyV, RUv)
-                gv.addColorStop(0, "rgba(52,8,8," + coreA + ")")
-                gv.addColorStop(0.7, "rgba(52,8,8," + coreA * 0.8 + ")")
-                gv.addColorStop(1, "rgba(52,8,8,0)")
-                ctx.fillStyle = gv
-                ctx.fillRect(0, 0, w, h)
-                ctx.restore()
-              }
-
-              // Face: dot eyes (right one winks into a closed lid) and a smile.
-              ctx.fillStyle = INK
-              ctx.strokeStyle = INK
-              var eyeR = Math.max(1.5, R * 0.075)
-              var eyeY = cy - R * 0.16
-              var eyeDX = R * 0.30
-
-              ctx.beginPath()
-              ctx.arc(cx - eyeDX, eyeY, eyeR, 0, 2 * Math.PI)
-              ctx.fill()
-
-              if (root.winkNow) {
-                ctx.lineWidth = Math.max(1.5, R * 0.045)
-                ctx.lineCap = "round"
-                ctx.beginPath()
-                ctx.arc(cx + eyeDX, eyeY - eyeR * 0.6, eyeR * 1.5, Math.PI * 0.15, Math.PI * 0.85)
-                ctx.stroke()
+              var ecl = root.artEclipse
+              var umbra = (ecl && ecl.depth > 0) ? Model.umbraFrame(ecl) : null
+              if (root.artStyle === "cartoon") {
+                Painters.paintHose(ctx, width, height, {
+                  fraction: root.displayFraction,
+                  wink: root.winkNow,
+                  booped: root.cartoonBooped,
+                  fg: root.fgColor,
+                  bg: Commons.Color.popups ? Commons.Color.popups.background : Commons.Color.background,
+                  baseBg: Commons.Color.background,
+                  accent: Commons.Color.accent,
+                  eclipse: ecl,
+                  umbra: umbra
+                })
               } else {
-                ctx.beginPath()
-                ctx.arc(cx + eyeDX, eyeY, eyeR, 0, 2 * Math.PI)
-                ctx.fill()
+                Painters.paintVector(ctx, width, height, {
+                  fraction: root.displayFraction,
+                  wink: root.winkNow,
+                  tongueOut: root.tongueOut,
+                  eclipse: ecl,
+                  umbra: umbra
+                })
               }
-
-              ctx.lineWidth = Math.max(2, R * 0.055)
-              ctx.lineCap = "round"
-              ctx.beginPath()
-              ctx.arc(cx, cy - R * 0.02, R * 0.40, Math.PI * 0.18, Math.PI * 0.82)
-              ctx.stroke()
-
-              // Cheeky tongue hanging from the middle of the smile; the
-              // only red anywhere in the plugin.
-              if (root.tongueOut) {
-                var myc = cy - R * 0.02
-                var tx = cx
-                var ty = myc + R * 0.38
-                ctx.fillStyle = "#D64545"
-                ctx.beginPath()
-                ctx.moveTo(tx - R * 0.15, ty)
-                ctx.quadraticCurveTo(tx - R * 0.17, ty + R * 0.28, tx, ty + R * 0.33)
-                ctx.quadraticCurveTo(tx + R * 0.17, ty + R * 0.28, tx + R * 0.15, ty)
-                ctx.closePath()
-                ctx.fill()
-                ctx.strokeStyle = "rgba(122,32,32,0.55)"
-                ctx.lineWidth = Math.max(1, R * 0.03)
-                ctx.beginPath()
-                ctx.moveTo(tx, ty + R * 0.07)
-                ctx.lineTo(tx, ty + R * 0.24)
-                ctx.stroke()
-              }
-
-              // Soft rim.
-              ctx.lineWidth = Math.max(1, R * 0.03)
-              ctx.strokeStyle = RIM
-              ctx.beginPath()
-              ctx.arc(cx, cy, R - ctx.lineWidth / 2, 0, 2 * Math.PI)
-              ctx.stroke()
-            }
-
-function paintHose(ctx, w, h) {
-              if (w < 10 || h < 10) return
-              var cx = w / 2
-              var cy = h / 2
-              var k = Math.min(w, h) / 2 * 0.97   // one SVG unit = k px
-
-              // Theme mapping: the reference's off-white body is the popup
-              // surface, its near-black ink is the bar foreground, and the
-              // tongue is a foreground/background mix. No literals.
-              var fg = root.bar ? root.bar.foreground : Commons.Color.foreground
-              var bg = Commons.Color.popups ? Commons.Color.popups.background : Commons.Color.background
-              function inkA(a) { return Qt.rgba(fg.r, fg.g, fg.b, a) }
-
-              // Geometry helpers in SVG-normalized coordinates.
-              function P(dx, dy) { return [cx + dx * k, cy + dy * k] }
-
-              var f = root.displayFraction
-              var t = Math.cos(2 * Math.PI * f)
-              var dir = f < 0.5 ? 1 : -1
-
-              // Rotated ellipses are built as parametric polylines:
-              // Qt's Context2D replays stored path data through the
-              // matrix active at DRAW time, so transform-built paths
-              // leak into later fills as ghost shapes.
-              function ovalPath(x, y, rx, ry, rot) {
-                ctx.beginPath()
-                var N = 48
-                var cr = Math.cos(rot), sr = Math.sin(rot)
-                for (var i = 0; i <= N; i++) {
-                  var a = 2 * Math.PI * i / N
-                  var ex = rx * Math.cos(a), ey = ry * Math.sin(a)
-                  var px = x + ex * cr - ey * sr
-                  var py = y + ex * sr + ey * cr
-                  if (i === 0) ctx.moveTo(px, py)
-                  else ctx.lineTo(px, py)
-                }
-                ctx.closePath()
-              }
-              // Body: exact card surface so the disc melts into the panel.
-              ctx.beginPath()
-              ctx.arc(cx, cy, k, 0, 2 * Math.PI)
-              ctx.fillStyle = bg
-              ctx.fill()
-
-              // Dark side: etched hatching clipped to the antiphase region.
-              ctx.save()
-              regionPath(ctx, w, h, -dir, -t)
-              ctx.clip()
-              ctx.strokeStyle = inkA(0.45)
-              ctx.lineWidth = Math.max(1, k * 0.016)
-              var hca = Math.cos(-0.34), hsa = Math.sin(-0.34)
-              for (var hl = -9; hl <= 9; hl++) {
-                var hy = hl * k * 0.10
-                var ex1 = -k * 1.3, ey1 = hy, ex2 = k * 1.3
-                ctx.beginPath()
-                ctx.moveTo(cx + ex1 * hca - ey1 * hsa, cy + ex1 * hsa + ey1 * hca)
-                ctx.lineTo(cx + ex2 * hca - ey1 * hsa, cy + ex2 * hsa + ey1 * hca)
-                ctx.stroke()
-              }
-              ctx.restore()
-
-              // Eclipse: solid umbrella shadow clipped to disk ∩ umbra
-              // circle — same radial geometry as the text-art stamp. Uses
-              // inkA() so the result is monochrome (ink palette colors only,
-              // no new hue), with a lighter rim ring for the soft edge.
-              if (root.artEclipse && root.artEclipse.depth > 0) {
-                var ecl = root.artEclipse
-                var ufH = Model.umbraFrame(ecl)
-                var RUh = ufH.r * k
-                var flipH = root.displaySouthUp ? -1 : 1
-                var oxH = flipH * ufH.ox * k
-                var oyH = ufH.oy * k
-                var ucx = cx + oxH
-                var ucy = cy + oyH
-                // Clip: disk ∩ umbra circle — the two-circle intersection
-                // that makes a natural arc at every angle.
-                ctx.save()
-                ctx.beginPath()
-                ctx.arc(cx, cy, k * 0.97, 0, 2 * Math.PI)
-                ctx.clip()
-                ctx.beginPath()
-                ctx.arc(ucx, ucy, RUh + 0.35 * k, 0, 2 * Math.PI)
-                ctx.fillStyle = inkA(Math.min(0.35, 0.12 + 0.23 * ecl.depth))
-                ctx.fill()
-                ctx.beginPath()
-                ctx.arc(ucx, ucy, RUh, 0, 2 * Math.PI)
-                ctx.fillStyle = inkA(Math.min(0.65, 0.22 + 0.45 * ecl.depth))
-                ctx.fill()
-                ctx.restore()
-              }
-
-              // Craters: thin outlined ellipses (reference layout), shown
-              // on the lit surface only.
-              ctx.save()
-              regionPath(ctx, w, h, dir, t)
-              ctx.clip()
-              ctx.strokeStyle = fg
-              ctx.lineWidth = Math.max(1, k * 0.0156)
-              var craters = [
-                // Right side: exactly three.
-                [ 0.756,  0.356, 0.111, 0.067,  0.35],
-                [ 0.820, -0.140, 0.075, 0.048, -0.22],
-                [ 0.560,  0.560, 0.065, 0.042,  0.18],
-                // Left / top / bottom.
-                [-0.720, -0.680, 0.133, 0.080, -0.52],
-                [-0.778, -0.231, 0.093, 0.067, -0.17],
-                [-0.564,  0.053, 0.047, 0.047,  0.00],
-                [-0.658,  0.480, 0.147, 0.087, -0.44],
-                [-0.164,  0.800, 0.187, 0.100, -0.17],
-                [-0.920,  0.280, 0.055, 0.038, -0.25],
-                [-0.600, -0.880, 0.060, 0.040,  0.20]
-              ]
-              for (var cg = 0; cg < craters.length; cg++) {
-                var cp = P(craters[cg][0], craters[cg][1])
-                ovalPath(cp[0], cp[1], craters[cg][2] * k,
-                         craters[cg][3] * k, craters[cg][4])
-                ctx.strokeStyle = fg
-                ctx.lineWidth = Math.max(1, k * 0.0156)
-                ctx.stroke()
-              }
-              ctx.restore()
-
-              // ---- Face (SVG-derived geometry) ----
-
-              // Eyes: big outlined ovals, ink pupils, tiny highlights.
-              // Right eye winks away into a closed lid.
-              var eyes = [
-                { c: [-0.315, -0.360], rx: 0.165, ry: 0.215, rot: -0.160,
-                  pu: [-0.292, -0.270], prx: 0.0575, pry: 0.0825,
-                  hl: [-0.302, -0.285], right: false },
-                { c: [ 0.058, -0.4525], rx: 0.155, ry: 0.1925, rot: -0.110,
-                  pu: [ 0.082, -0.3625], prx: 0.054, pry: 0.0775,
-                  hl: [ 0.071, -0.3765], right: true }
-              ]
-              for (var ev = 0; ev < eyes.length; ev++) {
-                var E = eyes[ev]
-                var ec = P(E.c[0], E.c[1])
-                if (E.right && root.winkNow) continue
-                ovalPath(ec[0], ec[1], E.rx * k, E.ry * k, E.rot)
-                ctx.fillStyle = bg
-                ctx.fill()
-                ctx.strokeStyle = fg
-                ctx.lineWidth = Math.max(1.5, k * 0.0222)
-                ctx.stroke()
-                var pc = P(E.pu[0], E.pu[1])
-                ovalPath(pc[0], pc[1], E.prx * k, E.pry * k, E.rot)
-                ctx.fillStyle = fg
-                ctx.fill()
-                var hc = P(E.hl[0], E.hl[1])
-                ctx.fillStyle = bg
-                ctx.beginPath()
-                ctx.arc(hc[0], hc[1], Math.max(2, 0.025 * k), 0, 2 * Math.PI)
-                ctx.fill()
-              }
-              // Brows: expressive filled wedges.
-              ctx.fillStyle = fg
-              ctx.beginPath()
-              ctx.moveTo.apply(ctx, P(-0.598, -0.523))
-              ctx.quadraticCurveTo.apply(ctx, P(-0.532, -0.750).concat(P(-0.416, -0.830)))
-              ctx.quadraticCurveTo.apply(ctx, P(-0.443, -0.750).concat(P(-0.549, -0.639)))
-              ctx.closePath()
-              ctx.fill()
-              var wy = root.winkNow ? k * 0.13 : 0
-              ctx.beginPath()
-              ctx.moveTo.apply(ctx, P(-0.034, -0.820 + wy / k))
-              ctx.quadraticCurveTo.apply(ctx,
-                P(0.148, (-0.900 * k + wy) / k).concat(P(0.299, (-0.767 * k + wy) / k)))
-              ctx.quadraticCurveTo.apply(ctx,
-                P(0.112, (-0.847 * k + wy) / k).concat(P(-0.034, (-0.820 * k + wy) / k)))
-              ctx.closePath()
-              ctx.fill()
-
-
-
-
-              if (root.winkNow) {
-                var wpts = [P(0.110, -0.565), P(-0.005, -0.520),
-                            P(-0.055, -0.470), P(0.000, -0.417),
-                            P(0.095, -0.375)]
-                // Pivot on the corner (index 2); -20 deg = CCW on screen.
-                var wcx = wpts[2][0], wcy = wpts[2][1]
-                var wa = -20 * Math.PI / 180
-                var wr = Math.cos(wa), ws = Math.sin(wa)
-                for (var wi = 0; wi < wpts.length; wi++) {
-                  var wdx = wpts[wi][0] - wcx, wdy = wpts[wi][1] - wcy
-                  wpts[wi] = [wcx + wdx * wr - wdy * ws,
-                              wcy + wdx * ws + wdy * wr]
-                }
-                var wt = wpts[0], wm1 = wpts[1], wv = wpts[2]
-                var wm2 = wpts[3], wb = wpts[4]
-                ctx.strokeStyle = fg
-                ctx.lineWidth = Math.max(1.5, k * 0.018)
-                ctx.lineCap = "round"
-                ctx.beginPath()
-                ctx.moveTo(wt[0], wt[1])
-                ctx.quadraticCurveTo(wm1[0], wm1[1], wv[0], wv[1])
-                ctx.quadraticCurveTo(wm2[0], wm2[1], wb[0], wb[1])
-                ctx.stroke()
-              }
-
-              // Nose: body-colored blade with an ink outline.
-              ctx.beginPath()
-              ctx.moveTo.apply(ctx, P(0.082, -0.293))
-              ctx.quadraticCurveTo.apply(ctx, P(0.407, -0.480).concat(P(0.349, -0.307)))
-              ctx.quadraticCurveTo.apply(ctx, P(0.273, -0.173).concat(P(-0.011, -0.093)))
-              ctx.closePath()
-              ctx.fillStyle = bg
-              ctx.fill()
-              ctx.strokeStyle = fg
-              ctx.lineWidth = Math.max(1.5, k * 0.0222)
-              ctx.lineJoin = "round"
-              ctx.stroke()
-
-              // Wide-open smile: deep dark cavity, a light crescent of
-              // upper teeth tucked under the lip, semi-dark tongue nested
-              // at the bottom.
-              var DEEP = Qt.rgba(Commons.Color.background.r, Commons.Color.background.g, Commons.Color.background.b, 1)
-              var TONGUE = Qt.rgba(
-                fg.r * 0.30 + DEEP.r * 0.70,
-                fg.g * 0.30 + DEEP.g * 0.70,
-                fg.b * 0.30 + DEEP.b * 0.70, 1)
-              function mouthPath() {
-                ctx.beginPath()
-                ctx.moveTo.apply(ctx, P(-0.351, 0.164))
-                ctx.quadraticCurveTo.apply(ctx, P(0.010, 0.170).concat(P(0.382, -0.187)))
-                ctx.quadraticCurveTo.apply(ctx, P(0.422, 0.333).concat(P(0.102, 0.613)))
-                ctx.quadraticCurveTo.apply(ctx, P(-0.200, 0.800).concat(P(-0.351, 0.164)))
-                ctx.closePath()
-              }
-              mouthPath()
-              ctx.fillStyle = DEEP
-              ctx.fill()
-              ctx.save()
-              mouthPath()
-              ctx.clip()
-              // Upper teeth: a distinct crescent arc dropping from the
-              // upper lip into the cavity.
-              ctx.fillStyle = fg
-              ctx.beginPath()
-              ctx.moveTo.apply(ctx, P(-0.351, 0.164))
-              ctx.quadraticCurveTo.apply(ctx, P(0.010, 0.170).concat(P(0.382, -0.187)))
-              ctx.quadraticCurveTo.apply(ctx, P(0.010, 0.330).concat(P(-0.351, 0.164)))
-              ctx.closePath()
-              ctx.fill()
-              // Tongue: soft mound rising from the bottom of the cavity.
-              var tc = P(0.089, 0.600)
-              ctx.beginPath()
-              for (var ti = 0; ti <= 24; ti++) {
-                var ta = Math.PI * ti / 24
-                var tx = tc[0] + 0.240 * k * Math.cos(ta)
-                var ty = tc[1] + 0.133 * k * Math.sin(ta)
-                ti === 0 ? ctx.moveTo(tx, ty) : ctx.lineTo(tx, ty)
-              }
-              ctx.closePath()
-              ctx.fillStyle = TONGUE
-              ctx.fill()
-              ctx.strokeStyle = fg
-              ctx.lineWidth = Math.max(1, k * 0.0167)
-              ctx.beginPath()
-              ctx.moveTo.apply(ctx, P(-0.151, 0.533))
-              ctx.quadraticCurveTo.apply(ctx, P(0.089, 0.431).concat(P(0.329, 0.533)))
-              ctx.stroke()
-              ctx.restore()
-              mouthPath()
-              ctx.strokeStyle = fg
-              ctx.lineWidth = Math.max(1.5, k * 0.020)
-              ctx.stroke()
-
-              // Cheek dimple off the left corner.
-              ctx.strokeStyle = fg
-              ctx.lineWidth = Math.max(1.5, k * 0.020)
-              ctx.lineCap = "round"
-              ctx.beginPath()
-              ctx.moveTo.apply(ctx, P(-0.365, 0.253))
-              ctx.quadraticCurveTo.apply(ctx, P(-0.431, 0.187).concat(P(-0.387, 0.080)))
-              ctx.stroke()
-
-              // Hand-inked wobbly outline, thick then thin.
-              function wobble(r) {
-                ctx.beginPath()
-                var N = 64
-                for (var i = 0; i <= N; i++) {
-                  var a = 2 * Math.PI * i / N
-                  var rr = r * (1 + 0.026 * Math.sin(3 * a + 1.7) + 0.013 * Math.sin(7 * a + 0.6) + 0.008 * Math.sin(11 * a))
-                  var x = cx + rr * Math.cos(a)
-                  var y = cy + rr * Math.sin(a)
-                  i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)
-                }
-                ctx.closePath()
-              }
-              ctx.strokeStyle = fg
-              ctx.lineJoin = "round"
-              wobble(k)
-              ctx.lineWidth = Math.max(2, k * 0.027)
-              ctx.stroke()
             }
           }
 
+          SequentialAnimation {
+            id: boopAnim
+            NumberAnimation { target: moonCanvas; property: "scale"; to: 1.09; duration: 110; easing.type: Easing.OutQuad }
+            NumberAnimation { target: moonCanvas; property: "scale"; to: 0.94; duration: 110; easing.type: Easing.InOutQuad }
+            NumberAnimation { target: moonCanvas; property: "scale"; to: 1.03; duration: 120; easing.type: Easing.InOutQuad }
+            NumberAnimation { target: moonCanvas; property: "scale"; to: 1.00; duration: 140; easing.type: Easing.OutQuad }
+          }
+
           // ---- Clay plates ----
-          // Eight painted states instead of a computed disc. The plates are
-          // pre-masked to a transparent circle, so the panel's own background
-          // and star field show around the moon. All eight stay loaded; the
-          // phase only moves opacity, which is also the crossfade.
           Item {
             id: clayStack
             visible: root.artStyle === "clay"
-            // Square plate scaled so the painted disc lands at the same
-            // diameter the other styles use (their radius is 0.97 of the
-            // smaller side).
-            width: moonText.height * 0.97 / root.clayDiscFrac
+            width: Math.min(moonText.width, moonText.height) * 0.97 / root.clayDiscFrac
             height: width
             anchors.centerIn: moonText
 
-            // Clay stars: the baked sky cut into one image per star, so each
-            // keeps its real pixels and twinkles on its own cycle. Positions
-            // come from the build (art/stars.js). The whole layer mirrors as
-            // one piece for the southern view.
+            // Clay stars: baked sky cut into individual star images.
             Item {
               id: clayStars
-              // Pulled in a little: the sky in the artwork runs to the frame
-              // edge, which is wider than the panel card.
               readonly property real inset: 0.93
               anchors.fill: parent
               transform: [
@@ -1163,7 +1064,7 @@ function paintHose(ctx, w, h) {
                   required property var modelData
                   required property int index
 
-                  source: Qt.resolvedUrl("art/star-" + index + ".webp")
+                  source: root.clayLoaded ? Qt.resolvedUrl("art/star-" + index + ".webp") : ""
                   width: parent.width * Stars.CROP
                   height: width
                   x: modelData.fx * parent.width - width / 2
@@ -1197,7 +1098,7 @@ function paintHose(ctx, w, h) {
               Image {
                 required property int index
                 anchors.fill: parent
-                source: Qt.resolvedUrl("art/clay-" + index + ".webp")
+                source: root.clayLoaded ? Qt.resolvedUrl("art/clay-" + index + ".webp") : ""
                 fillMode: Image.PreserveAspectFit
                 smooth: true
                 mirror: root.displaySouthUp
@@ -1207,16 +1108,54 @@ function paintHose(ctx, w, h) {
               }
             }
 
-            // Taps are handled by artContainer: a handler here would fire
-            // alongside the one on the text layer and skip a style.
             HoverHandler { cursorShape: Qt.PointingHandCursor }
           }
 
-          // Clay eclipse: the plates are photographs of a sculpted moon, so
-          // the shadow is painted on top instead of recomputed. Everything
-          // is clipped to the painted circle, and the fills stay translucent
-          // so the sculpture reads through them. No new colors: the theme's
-          // alert color, darkened toward the umbra core.
+          // Clay flag easter egg: tiny pennant popping out of the upper pole.
+          Text {
+            id: clayFlag
+            visible: false
+            opacity: 0
+            text: "\u2691"
+            color: Commons.Color.accent
+            font.family: root.uiFont
+            font.pixelSize: Style.font.title
+            x: clayStack.x + clayStack.width / 2 - implicitWidth / 2
+            y: clayStack.y + clayStack.height * (0.495 - root.clayDiscFrac / 2) - implicitHeight * 0.7
+            transformOrigin: Item.Bottom
+          }
+
+          SequentialAnimation {
+            id: clayFlagSequence
+            ScriptAction {
+              script: {
+                clayFlag.visible = true
+                clayFlag.opacity = 0
+                clayFlag.scale = 0.2
+                clayFlag.rotation = -14
+              }
+            }
+            ParallelAnimation {
+              NumberAnimation { target: clayFlag; property: "opacity"; to: 1; duration: 220 }
+              NumberAnimation { target: clayFlag; property: "scale"; to: 1.0; duration: 360; easing.type: Easing.OutBack }
+              NumberAnimation { target: clayFlag; property: "rotation"; to: 4; duration: 360; easing.type: Easing.OutQuad }
+            }
+            NumberAnimation { target: clayFlag; property: "rotation"; to: -5; duration: 280; easing.type: Easing.InOutSine }
+            NumberAnimation { target: clayFlag; property: "rotation"; to: 3; duration: 280; easing.type: Easing.InOutSine }
+            PauseAnimation { duration: 900 }
+            ParallelAnimation {
+              NumberAnimation { target: clayFlag; property: "opacity"; to: 0; duration: 260 }
+              NumberAnimation { target: clayFlag; property: "scale"; to: 0.3; duration: 260; easing.type: Easing.InBack }
+            }
+            ScriptAction {
+              script: {
+                clayFlag.visible = false
+                root.clayFlagRunning = false
+              }
+            }
+          }
+
+          // Clay eclipse shadow painted over the sculpted disc.
           Canvas {
             id: clayShadow
             anchors.centerIn: clayStack
@@ -1229,94 +1168,24 @@ function paintHose(ctx, w, h) {
               JSON.stringify(root.artEclipse),
               Commons.Color.urgent.toString()
             ]
-            on_SigChanged: requestPaint()
-            onVisibleChanged: if (visible) requestPaint()
-            Component.onCompleted: requestPaint()
+            on_SigChanged: if (visible && root.opened) requestPaint()
+            onVisibleChanged: if (visible && root.opened) requestPaint()
 
             onPaint: {
               var ctx = getContext("2d")
               ctx.reset()
               if (!root.artEclipse || root.artEclipse.depth <= 0) return
-              paintClayShadow(ctx, width, height)
-            }
-
-            // Transit and depth share Model.umbraFrame with the other
-            // styles. The umbra circle is 2.7 disc radii wide, so its edge
-            // across the disc is the arc a partial eclipse shows; a total
-            // one swallows the disc whole and stays coppery.
-            function paintClayShadow(ctx, w, h) {
-              if (w < 10 || h < 10) return
-              var ecl = root.artEclipse
-              var depth = Math.max(0, Math.min(1, ecl.depth))
-              var cx = w / 2
-              var cy = h * 0.495           // ball centre in the plate frame
-              var R = w * root.clayDiscFrac / 2
-              var frame = Model.umbraFrame(ecl)
-              var flip = root.displaySouthUp ? -1 : 1
-              var ux = cx + flip * frame.ox * R
-              var uy = cy + frame.oy * R
-              var ur = frame.r * R
-
-              var alert = Commons.Color.urgent
-              var core = Qt.darker(alert, 2.2)
-              // Canvas fillStyle wants a string, not a color object.
-              function rgba(c, a) {
-                return "rgba(" + Math.round(c.r * 255) + "," + Math.round(c.g * 255)
-                    + "," + Math.round(c.b * 255) + "," + a + ")"
-              }
-
-              ctx.save()
-              ctx.beginPath()
-              ctx.arc(cx, cy, R, 0, 2 * Math.PI)
-              ctx.clip()
-
-              // Umbra body. The plates are soft-focus sculptures, so the
-              // shadow edge is feathered instead of a vector circle: flat far
-              // inside, a long falloff across the geometric edge (65% of the
-              // core alpha at `ur`) and a faint skirt beyond it. The skirt is
-              // the nearest thing to a penumbra we can show — penumbral-only
-              // events are skipped entirely.
-              var coreA = Math.min(0.84, 0.12 + 0.72 * Math.pow(depth, 1.25))
-              var g0 = ur - 0.30 * R
-              var g1 = ur + 1.00 * R
-              function at(r) { return (r - g0) / (g1 - g0) }
-              var gb = ctx.createRadialGradient(ux, uy, g0, ux, uy, g1)
-              gb.addColorStop(0, rgba(core, coreA))
-              gb.addColorStop(at(ur - 0.10 * R), rgba(core, coreA * 0.93))
-              gb.addColorStop(at(ur), rgba(core, coreA * 0.65))
-              gb.addColorStop(at(ur + 0.25 * R), rgba(core, coreA * 0.28))
-              gb.addColorStop(at(ur + 0.60 * R), rgba(core, coreA * 0.08))
-              gb.addColorStop(1, rgba(core, 0))
-              ctx.fillStyle = gb
-              ctx.beginPath()
-              ctx.arc(ux, uy, g1, 0, 2 * Math.PI)
-              ctx.fill()
-
-              // Deeper toward the shadow axis, which only shows once the
-              // umbra covers a good part of the disc.
-              var gd = ctx.createRadialGradient(ux, uy, 0, ux, uy, ur * 0.8)
-              gd.addColorStop(0, rgba(Qt.darker(core, 1.5), coreA * 0.35))
-              gd.addColorStop(1, rgba(core, 0))
-              ctx.fillStyle = gd
-              ctx.beginPath()
-              ctx.arc(ux, uy, ur * 0.8, 0, 2 * Math.PI)
-              ctx.fill()
-
-              // Totality keeps a warm rim: refracted sunlight pools at the
-              // limb, and it stops the disc dissolving into the card.
-              if (ecl.kind === "total" && depth > 0.6) {
-                var rimK = (depth - 0.6) / 0.4
-                var gr = ctx.createRadialGradient(cx, cy, R * 0.6, cx, cy, R)
-                gr.addColorStop(0, rgba(alert, 0))
-                gr.addColorStop(0.85, rgba(alert, 0.16 * rimK))
-                gr.addColorStop(1, rgba(alert, 0.42 * rimK))
-                ctx.fillStyle = gr
-                ctx.fillRect(0, 0, w, h)
-              }
-              ctx.restore()
+              Painters.paintClayShadow(ctx, width, height, {
+                eclipse: root.artEclipse,
+                umbra: Model.umbraFrame(root.artEclipse),
+                southUp: root.displaySouthUp,
+                discFrac: root.clayDiscFrac,
+                alert: Commons.Color.urgent
+              })
             }
           }
 
+          // Twinkling text starfield (stopped & hidden when in clay style).
           Repeater {
             model: root.starField
 
@@ -1324,18 +1193,16 @@ function paintHose(ctx, w, h) {
               required property var modelData
               required property int index
 
-              // The clay style uses its own sculpted star layer; the plate
-              // stars are masked out.
               visible: root.artStyle !== "clay"
               x: modelData.fx * parent.width - implicitWidth / 2
               y: modelData.fy * parent.height - implicitHeight / 2
               text: modelData.glyph
-              color: root.bar.foreground
+              color: root.fgColor
               font.family: "monospace"
               font.pixelSize: index % 2 === 0 ? Style.font.caption : Style.font.bodySmall
 
               SequentialAnimation on opacity {
-                running: root.opened
+                running: root.opened && root.artStyle !== "clay"
                 loops: Animation.Infinite
 
                 NumberAnimation {
@@ -1355,7 +1222,7 @@ function paintHose(ctx, w, h) {
             }
           }
 
-          // ---- Egg actors (hidden until a flight starts) ----
+          // ---- Tranquillity Base anchor (shared by blocks / braille / ascii) ----
           readonly property real eggManX: {
             var c = Model.seaCenter(Model.EGG_SEA)
             if (!c) return 0
@@ -1368,192 +1235,166 @@ function paintHose(ctx, w, h) {
             return moonText.y + ((c.y + 1) / 2) * moonText.implicitHeight
           }
 
-          Text {
-            id: moonMan
+          // ---- Apollo 11 Eagle lander easter egg (all text/ASCII styles) ----
+          Column {
+            id: eagleLander
             visible: false
             opacity: 0
-            x: artContainer.eggManX - implicitWidth / 2
-            y: artContainer.eggManY - implicitHeight
-            text: "\\o/"
-            textFormat: Text.PlainText
-            // Same dim role oma.quake gives its small-magnitude events.
-            color: Commons.Color.muted
-            style: Text.Outline
-            styleColor: "#b3000000"
-            font.family: "monospace"
-            font.pixelSize: Style.font.title
-            font.bold: true
-            transformOrigin: Item.Bottom
-          }
+            x: artContainer.eggManX - width / 2
+            y: Style.space(6)
+            spacing: 0
 
-          // The beam is PAINTED, not a rotated Rectangle: rotating an item
-          // in this layer surface rendered with a stale/wrong transform
-          // (aimed at the window corner regardless of property values), so
-          // the beam is a canvas line drawn from saucer belly to resident.
-          Canvas {
-            id: beamRect
-            visible: false
-            opacity: 0
-            anchors.fill: parent
-
-            onPaint: {
-              var ctx = getContext("2d")
-              ctx.reset()
-              ctx.strokeStyle = Commons.Color.accent
-              ctx.lineWidth = Math.max(2, Style.space(3))
-              ctx.lineCap = "round"
-              ctx.beginPath()
-              ctx.moveTo(root.eggBeamSrcX, root.eggBeamSrcY)
-              ctx.lineTo(root.eggBeamTgtX, root.eggBeamTgtY)
-              ctx.stroke()
+            Text {
+              anchors.horizontalCenter: parent.horizontalCenter
+              text: " /_\\ \n|===|\n/   \\"
+              textFormat: Text.PlainText
+              color: Commons.Color.accent
+              style: Text.Outline
+              styleColor: Commons.Color.background
+              font.family: "monospace"
+              font.pixelSize: Style.font.caption
+              font.bold: true
+            }
+            Text {
+              id: eagleFlame
+              anchors.horizontalCenter: parent.horizontalCenter
+              text: " * "
+              textFormat: Text.PlainText
+              color: Commons.Color.urgent
+              font.family: "monospace"
+              font.pixelSize: Style.font.caption
+              font.bold: true
+              opacity: 0
             }
           }
 
           Text {
-            id: ufoText
+            id: eagleBanner
             visible: false
             opacity: 0
-            y: Style.space(8)
-            // Classic line-art saucer; dark outline keeps it legible.
-            text: "  ___  \n<( o )>"
-            textFormat: Text.PlainText
-            color: Commons.Color.urgent
-            style: Text.Outline
-            styleColor: "#b3000000"
-            font.family: "monospace"
-            font.pixelSize: Style.font.title
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.bottom: parent.bottom
+            text: "THE EAGLE HAS LANDED"
+            color: Commons.Color.accent
+            font.family: root.uiFont
+            font.pixelSize: Style.font.caption
             font.bold: true
-          }
-
-          // The beam's painted geometry is driven imperatively: chained
-          // bindings on rotation/height proved unreliable here (the engine
-          // froze them at their first evaluation, aiming the beam at the
-          // window corner). Direct assignment per position change cannot
-          // be silently disabled.
-          Connections {
-            target: ufoText
-            function onXChanged() { root.updateBeam() }
-            function onYChanged() { root.updateBeam() }
+            font.letterSpacing: 1
           }
 
           SequentialAnimation {
-            id: waveAnim
+            id: thrusterAnim
             running: false
             loops: Animation.Infinite
-
-            NumberAnimation { target: moonMan; property: "rotation"; to: 20; duration: 240; easing.type: Easing.InOutQuad }
-            NumberAnimation { target: moonMan; property: "rotation"; to: -16; duration: 240; easing.type: Easing.InOutQuad }
+            NumberAnimation { target: eagleFlame; property: "opacity"; to: 1.0; duration: 110 }
+            NumberAnimation { target: eagleFlame; property: "opacity"; to: 0.25; duration: 110 }
           }
 
           SequentialAnimation {
-            id: eggSequence
-
+            id: eagleSequence
             ScriptAction {
               script: {
-                ufoText.opacity = 0
-                ufoText.y = Style.space(8)
-                ufoText.x = -ufoText.implicitWidth - Style.space(8)
-                moonMan.visible = true
-                beamRect.visible = true
-                ufoText.visible = true
-                root.updateBeam()
-                waveAnim.restart()
+                eagleLander.y = Style.space(6)
+                eagleLander.opacity = 0
+                eagleLander.visible = true
+                eagleBanner.opacity = 0
+                eagleBanner.visible = true
+                thrusterAnim.restart()
               }
             }
-
-            // Approach: glide in from off-screen toward the orbit entry
-            // point left of the resident.
             ParallelAnimation {
-              NumberAnimation { target: ufoText; property: "opacity"; to: 1; duration: 250 }
-              NumberAnimation { target: moonMan; property: "opacity"; to: 1; duration: 400 }
+              NumberAnimation { target: eagleLander; property: "opacity"; to: 1; duration: 260 }
               NumberAnimation {
-                target: ufoText; property: "x"
-                to: root.eggOrbitCx - root.eggOrbitR - ufoText.implicitWidth / 2
-                duration: 1000
-                easing.type: Easing.InOutQuad
-              }
-              NumberAnimation {
-                target: ufoText; property: "y"
-                to: root.eggOrbitCy - ufoText.implicitHeight / 2
-                duration: 1000
-                easing.type: Easing.InOutSine
+                target: eagleLander; property: "y"
+                to: Math.max(Style.space(8), artContainer.eggManY - eagleLander.height)
+                duration: 1800
+                easing.type: Easing.OutCubic
               }
             }
-
-            // Close enough: beam on, then two low orbits with the beam
-            // tracking the resident. (PathArc coordinates are the saucer's
-            // top-left position, hence the implicitWidth/2 offsets.)
-            ParallelAnimation {
-              NumberAnimation { target: beamRect; property: "opacity"; to: 0.45; duration: 450 }
-              PathAnimation {
-                target: ufoText
-                duration: 3400
-                path: Path {
-                  startX: root.eggOrbitCx - root.eggOrbitR - ufoText.implicitWidth / 2
-                  startY: root.eggOrbitCy - ufoText.implicitHeight / 2
-
-                  PathArc {
-                    x: root.eggOrbitCx + root.eggOrbitR - ufoText.implicitWidth / 2
-                    y: root.eggOrbitCy - ufoText.implicitHeight / 2
-                    radiusX: root.eggOrbitR
-                    radiusY: root.eggOrbitR
-                  }
-                  PathArc {
-                    x: root.eggOrbitCx - root.eggOrbitR - ufoText.implicitWidth / 2
-                    y: root.eggOrbitCy - ufoText.implicitHeight / 2
-                    radiusX: root.eggOrbitR
-                    radiusY: root.eggOrbitR
-                  }
-                  PathArc {
-                    x: root.eggOrbitCx + root.eggOrbitR - ufoText.implicitWidth / 2
-                    y: root.eggOrbitCy - ufoText.implicitHeight / 2
-                    radiusX: root.eggOrbitR
-                    radiusY: root.eggOrbitR
-                  }
-                  PathArc {
-                    x: root.eggOrbitCx - root.eggOrbitR - ufoText.implicitWidth / 2
-                    y: root.eggOrbitCy - ufoText.implicitHeight / 2
-                    radiusX: root.eggOrbitR
-                    radiusY: root.eggOrbitR
-                  }
-                }
-              }
-            }
-
-            // Beam off, break orbit, climb away and go dark off-screen.
-            ParallelAnimation {
-              NumberAnimation { target: beamRect; property: "opacity"; to: 0; duration: 300 }
-              NumberAnimation { target: ufoText; property: "y"; to: Style.space(8); duration: 950; easing.type: Easing.OutQuad }
-              NumberAnimation {
-                target: ufoText; property: "x"
-                to: artContainer.width + Style.space(8)
-                duration: 950
-                easing.type: Easing.InQuad
-              }
-              SequentialAnimation {
-                PauseAnimation { duration: 650 }
-                NumberAnimation { target: ufoText; property: "opacity"; to: 0; duration: 300 }
-              }
-            }
-
             ScriptAction {
               script: {
-                waveAnim.stop()
-                moonMan.rotation = 0
-                ufoText.visible = false
-                moonMan.visible = false
-                beamRect.visible = false
-                root.eggRunning = false
+                thrusterAnim.stop()
+                eagleFlame.opacity = 0
+              }
+            }
+            NumberAnimation { target: eagleBanner; property: "opacity"; to: 1; duration: 350 }
+            PauseAnimation { duration: 1900 }
+            ParallelAnimation {
+              NumberAnimation { target: eagleLander; property: "opacity"; to: 0; duration: 400 }
+              NumberAnimation { target: eagleBanner; property: "opacity"; to: 0; duration: 400 }
+            }
+            ScriptAction {
+              script: {
+                eagleLander.visible = false
+                eagleBanner.visible = false
+                root.eagleRunning = false
               }
             }
           }
+        }
 
+        // Mini 8-phase lunation progress strip (clickable to jump to any phase).
+        Row {
+          id: phaseStrip
+          anchors.horizontalCenter: parent.horizontalCenter
+          spacing: Style.space(10)
+
+          Repeater {
+            model: 8
+
+            delegate: Column {
+              id: phaseSlot
+              required property int index
+              readonly property bool active: Model.plateIndex(root.displayFraction) === index
+              readonly property var slotInfo: root.viewLunationSlots[index]
+              readonly property string slotGlyph: root.plainIcon
+                  ? Model.plainGlyphFor(index / 8, root.displaySouthUp)
+                  : Model.glyphFor(index / 8, root.displaySouthUp)
+              readonly property string slotTooltip: {
+                if (!slotInfo) return ""
+                if (root.devMode) return slotInfo.name
+                var ms = (index === root.livePhaseSlot && Math.abs(slotInfo.ms - root.liveNowMs) < 3 * 86400000)
+                    ? root.liveNowMs : slotInfo.ms
+                return slotInfo.name + " - " + root.formatShortDate(ms)
+              }
+
+              spacing: Style.space(3)
+
+              Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: slotGlyph
+                color: active ? root.fgColor : root.mutedFg
+                opacity: active ? 1.0 : (stripHover.hovered ? 0.8 : 0.42)
+                font.family: root.glyphFont
+                font.pixelSize: Style.font.body
+              }
+
+              Rectangle {
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: Style.space(4)
+                height: width
+                radius: width / 2
+                color: Commons.Color.accent
+                opacity: active ? 1.0 : 0.0
+              }
+
+              HoverHandler { id: stripHover; cursorShape: Qt.PointingHandCursor }
+              TapHandler { onTapped: root.scrubToPhaseIndex(index) }
+
+              PanelToolTip {
+                visible: root.opened && stripHover.hovered && phaseSlot.slotTooltip !== ""
+                delay: 150
+                text: phaseSlot.slotTooltip
+                fontFamily: root.uiFont
+              }
+            }
+          }
         }
 
         Rectangle {
           width: parent.width
           height: Style.spacing.hairline
-          color: root.bar.foreground
+          color: root.fgColor
           opacity: 0.12
         }
 
@@ -1564,75 +1405,178 @@ function paintHose(ctx, w, h) {
           anchors.horizontalCenter: parent.horizontalCenter
 
           Column {
-            spacing: Style.space(5)
+            spacing: Style.space(4)
 
             Text {
               text: "ILLUMINATION"
-              color: Qt.darker(root.bar.foreground, 1.5)
-              font.family: root.bar.fontFamily
+              color: root.mutedFg
+              font.family: root.uiFont
               font.pixelSize: Style.font.bodySmall
               font.letterSpacing: 1
             }
             Text {
               text: root.displayPhase.illuminationPct + "%"
-              color: root.bar.foreground
-              font.family: root.bar.fontFamily
+              color: root.fgColor
+              font.family: root.uiFont
               font.pixelSize: Style.font.title
             }
           }
 
           Column {
-            spacing: Style.space(5)
+            spacing: Style.space(4)
 
             Text {
               text: "MOON AGE"
-              color: Qt.darker(root.bar.foreground, 1.5)
-              font.family: root.bar.fontFamily
+              color: root.mutedFg
+              font.family: root.uiFont
               font.pixelSize: Style.font.bodySmall
               font.letterSpacing: 1
             }
             Text {
               text: root.displayPhase.ageDays.toFixed(1) + " days"
-              color: root.bar.foreground
-              font.family: root.bar.fontFamily
+              color: root.fgColor
+              font.family: root.uiFont
               font.pixelSize: Style.font.title
             }
           }
 
           Column {
-            spacing: Style.space(5)
+            spacing: Style.space(4)
 
             Text {
               text: "NEXT FULL"
-              color: Qt.darker(root.bar.foreground, 1.5)
-              font.family: root.bar.fontFamily
+              color: root.mutedFg
+              font.family: root.uiFont
               font.pixelSize: Style.font.bodySmall
               font.letterSpacing: 1
             }
             Text {
-              text: root.formatDate(root.phase.nextFullMs)
-              color: root.bar.foreground
-              font.family: root.bar.fontFamily
+              text: root.formatDate(root.viewPhase.nextFullMs)
+              color: root.fgColor
+              font.family: root.uiFont
               font.pixelSize: Style.font.title
             }
           }
 
           Column {
-            spacing: Style.space(5)
+            spacing: Style.space(4)
 
             Text {
               text: "NEXT NEW"
-              color: Qt.darker(root.bar.foreground, 1.5)
-              font.family: root.bar.fontFamily
+              color: root.mutedFg
+              font.family: root.uiFont
               font.pixelSize: Style.font.bodySmall
               font.letterSpacing: 1
             }
             Text {
-              text: root.formatDate(root.phase.nextNewMs)
-              color: root.bar.foreground
-              font.family: root.bar.fontFamily
+              text: root.formatDate(root.viewPhase.nextNewMs)
+              color: root.fgColor
+              font.family: root.uiFont
               font.pixelSize: Style.font.title
             }
+          }
+        }
+
+        // Active eclipse stage times (Start · Totality / Peak · Ends).
+        Row {
+          anchors.horizontalCenter: parent.horizontalCenter
+          visible: root.artEclipse !== null && root.artEclipse.u1Ms !== undefined
+          spacing: Style.space(22)
+
+          readonly property real eclNow: root.artEclipse
+              ? (root.artEclipse.simNowMs !== undefined ? root.artEclipse.simNowMs : root.viewNowMs)
+              : 0
+          readonly property bool isTotal: root.artEclipse !== null && root.artEclipse.kind === "total"
+
+          Column {
+            spacing: Style.space(2)
+            Text {
+              anchors.horizontalCenter: parent.horizontalCenter
+              text: "START"
+              color: root.mutedFg
+              font.family: root.uiFont
+              font.pixelSize: Style.font.caption
+              font.letterSpacing: 1
+            }
+            Text {
+              anchors.horizontalCenter: parent.horizontalCenter
+              text: root.artEclipse && root.artEclipse.u1Ms ? root.formatClockTime(root.artEclipse.u1Ms) : ""
+              color: root.mutedFg
+              font.family: root.uiFont
+              font.pixelSize: Style.font.body
+            }
+          }
+
+          Column {
+            spacing: Style.space(2)
+            readonly property bool inPeak: {
+              if (!root.artEclipse || !root.artEclipse.u2Ms) return false
+              if (parent.isTotal) return parent.eclNow >= root.artEclipse.u2Ms && parent.eclNow <= root.artEclipse.u3Ms
+              return Math.abs(parent.eclNow - root.artEclipse.greatestMs) <= 10 * 60000
+            }
+            Text {
+              anchors.horizontalCenter: parent.horizontalCenter
+              text: parent.parent.isTotal ? "TOTALITY" : "PEAK"
+              color: parent.inPeak ? Commons.Color.urgent : root.mutedFg
+              font.family: root.uiFont
+              font.pixelSize: Style.font.caption
+              font.letterSpacing: 1
+            }
+            Text {
+              anchors.horizontalCenter: parent.horizontalCenter
+              text: {
+                if (!root.artEclipse || !root.artEclipse.greatestMs) return ""
+                if (parent.parent.isTotal)
+                  return root.formatClockTime(root.artEclipse.u2Ms) + "–" + root.formatClockTime(root.artEclipse.u3Ms)
+                return root.formatClockTime(root.artEclipse.greatestMs)
+              }
+              color: parent.inPeak ? Commons.Color.urgent : root.fgColor
+              font.family: root.uiFont
+              font.pixelSize: Style.font.body
+              font.bold: parent.inPeak
+            }
+          }
+
+          Column {
+            spacing: Style.space(2)
+            Text {
+              anchors.horizontalCenter: parent.horizontalCenter
+              text: "ENDS"
+              color: root.mutedFg
+              font.family: root.uiFont
+              font.pixelSize: Style.font.caption
+              font.letterSpacing: 1
+            }
+            Text {
+              anchors.horizontalCenter: parent.horizontalCenter
+              text: root.artEclipse && root.artEclipse.u4Ms ? root.formatClockTime(root.artEclipse.u4Ms) : ""
+              color: root.fgColor
+              font.family: root.uiFont
+              font.pixelSize: Style.font.body
+            }
+          }
+        }
+
+        // Full-width row spanning both columns when an umbral eclipse is within 30 days.
+        Column {
+          width: parent.width
+          visible: root.soonEclipse !== null
+          spacing: Style.space(4)
+
+          Text {
+            anchors.horizontalCenter: parent.horizontalCenter
+            text: "NEXT ECLIPSE"
+            color: root.mutedFg
+            font.family: root.uiFont
+            font.pixelSize: Style.font.bodySmall
+            font.letterSpacing: 1
+          }
+          Text {
+            anchors.horizontalCenter: parent.horizontalCenter
+            text: root.formatSoonEclipse(root.soonEclipse)
+            color: root.fgColor
+            font.family: root.uiFont
+            font.pixelSize: Style.font.title
           }
         }
 
@@ -1643,9 +1587,9 @@ function paintHose(ctx, w, h) {
           Text {
             id: hintLabel
             anchors.centerIn: parent
-            text: "[S] Style · [I] Icon"
-            color: Qt.darker(root.bar.foreground, 1.5)
-            font.family: root.bar.fontFamily
+            text: "[s/S] Style · [I] Icon · [ / ] Day"
+            color: root.mutedFg
+            font.family: root.uiFont
             font.pixelSize: Style.font.bodySmall
           }
         }

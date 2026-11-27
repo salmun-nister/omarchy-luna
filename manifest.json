@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "salmun-nister.luna",
   "name": "Luna",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "author": "salmun-nister",
   "license": "MIT",
-  "description": "Lunar companion for the Omarchy bar: a live moon phase pill with a stylized popup showing illumination, moon age, and next full/new moon dates. Five art styles including a sculpted-clay moon, with lunar eclipse shadows.",
+  "description": "Lunar companion for the Omarchy bar: a live moon phase pill with a stylized popup showing illumination, moon age, full-moon names, date scrubbing, and next full/new moon dates. Six art styles including Unicode Braille, a 1930s rubber-hose moon, and sculpted clay, with lunar eclipse shadows, stage times, and alerts.",
   "kinds": [
     "bar-widget"
   ],

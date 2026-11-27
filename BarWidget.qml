@@ -48,6 +48,7 @@ BarWidget {
   // preview). Depth 0..1 scales both effects; kind is irrelevant here.
   readonly property real eclipseDepth: panelLoader.item ? panelLoader.item.pillEclipseDepth : 0
   readonly property bool pillIsPlainGlyph: panelLoader.item ? panelLoader.item.plainIcon === true : false
+  readonly property bool pillShowPercent: panelLoader.item ? panelLoader.item.showPercent === true : false
 
   onBarChanged: injectPanel()
   onSettingsChanged: injectPanel()
@@ -81,14 +82,17 @@ BarWidget {
     anchors.fill: parent
     bar: root.bar
     text: panelLoader.item ? panelLoader.item.label : ""
-    slotSize: Style.bar.statusSlot
+    labelText: (panelLoader.item && !root.vertical) ? panelLoader.item.percentLabel : ""
+    slotSize: Style.bar.statusSlot * (root.pillShowPercent && !root.vertical ? 2.1 : 1)
     tooltipText: panelLoader.item ? panelLoader.item.tooltipText : ""
 
     // During an eclipse the plain glyph shifts toward the theme's urgent
     // color with depth (Binding restores the default when inactive).
     Binding on foreground {
       when: root.pillIsPlainGlyph && root.eclipseDepth > 0 && root.bar !== null
-      value: Qt.tint(root.bar.foreground, Qt.rgba(root.bar.urgent.r, root.bar.urgent.g, root.bar.urgent.b, Math.min(1, root.eclipseDepth * 0.9)))
+      value: root.bar
+          ? Qt.tint(root.bar.foreground, Qt.rgba(root.bar.urgent.r, root.bar.urgent.g, root.bar.urgent.b, Math.min(1, root.eclipseDepth * 0.9)))
+          : "transparent"
     }
 
     // The plain-icon glyph lives in the Nerd Font PUA range, where unrelated
@@ -102,7 +106,10 @@ BarWidget {
       if (!root.bar) return
       if (b === Qt.RightButton) {
         var p = panelLoader.item
-        if (p) root.bar.run("omarchy-notification-send '" + p.notificationSummary + "'")
+        if (p) {
+          var safe = String(p.notificationSummary).replace(/'/g, "'\\''")
+          root.bar.run("omarchy-notification-send '" + safe + "'")
+        }
       } else if (b === Qt.MiddleButton) {
         if (panelLoader.item && panelLoader.item.cycleArtStyle) panelLoader.item.cycleArtStyle()
       } else {

@@ -5,6 +5,70 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — 2026-11-27
+
+### Added
+
+- New `braille` art style: high-resolution 2×4 sub-pixel Unicode Braille moon
+  with smooth limbs, dithered maria, ringed craters, and sub-pixel eclipse
+  shadows, inheriting the theme's foreground color.
+- Interactive date scrubber: step forward or backward by day with `[` / `]`,
+  scroll wheel over the moon, `‹` / `›` header buttons, or by clicking any
+  glyph in the new 8-phase lunation strip, with phase-and-date hover tooltips
+  (`T` / `0` snaps back to today).
+- Traditional full-moon names (Wolf, Snow, Harvest, Cold Moon, etc.) with
+  Supermoon, Micromoon, and Blue Moon badges computed offline from lunar
+  orbital anomaly and calendar dates.
+- Automatic full-width **Next Eclipse** row below the stats grid whenever an
+  umbral lunar eclipse is within 30 days, plus a live stage countdown and local
+  **Start / Peak (Totality) / Ends** times row during active umbral eclipses.
+- Interactive crater and mare hover labels in text-art styles (`blocks`,
+  `braille`, `ascii`).
+- `notifyEclipse` setting (default `true`) to send a click-to-open desktop
+  notification when a real umbral lunar eclipse starts or reaches totality.
+- `Shift+S` shortcut to cycle art styles in reverse, plus quick in-panel
+  persisted shortcuts for `+` / `-` (`artRows`), `B` (`clayBlend`), and `%`
+  (`showPercent`).
+
+### Changed
+
+- Redesigned `cartoon` art style as a full-character 1930s rubber-hose moon
+  with phase-reactive poses and expressions (sleepy at new moon, whistling on
+  crescent and gibbous phases, wide toothy grin at quarters, raised-arms laugh
+  at full moon), dark/light silhouette tuning, and boots styled from the
+  active theme's accent color.
+- Phase fraction, moon age, illumination, and glyphs now interpolate between
+  true Meeus ch. 49 quarter instants (new, first quarter, full, last quarter)
+  instead of a mean synodic month, keeping phase names, next-event dates, and
+  lunar eclipses mutually consistent.
+- Near-side crater and mare positions now follow northern-hemisphere naked-eye
+  orientation (eastern maria visible during waxing phases, western maria during
+  waning phases).
+- Style and setting persistence now applies immediately in-memory and defers
+  `shell.json` writes until the popup closes (and debounces off-panel changes),
+  eliminating bar-reload lag during rapid style switching; clay textures
+  preload on popup open and the art card height stays constant across styles.
+- Extracted canvas painters into `Painters.js`, stopped offscreen canvas
+  repaints and hidden star animations, and removed dead code.
+
+### Fixed
+
+- `showPercent` bar pill no longer shrinks the moon icon: illumination
+  percentage now renders in `BarIconButton.labelText` with an expanded slot
+  width while the moon glyph stays full-size.
+- Total lunar eclipse duration no longer double-counts totality (`semiTotalMs`
+  is nested inside Meeus's full umbral `semiPartialMs`), restoring accurate
+  U1–U4 windows and guarding against division by zero on razor-thin partials.
+- Grazing partial eclipses now use each event's actual umbra radius and
+  vertical contact chord so the shadow accurately contacts the disc from U1 to
+  U4.
+- Dev mode toggle no longer throws a `ReferenceError` on `remainMs`, and dev
+  eclipse previews now display Full Moon phase info consistently across the
+  panel and bar pill.
+- Null-safe `root.bar` color/font bindings eliminate startup `TypeError` log
+  noise before panel injection completes; notification summaries escape single
+  quotes cleanly.
+
 ## [0.3.0] — 2026-11-18
 
 ### Added
